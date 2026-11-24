@@ -338,7 +338,7 @@ export function generateConfigs() {
     const directory = published || (isManagedMohPath(m.path) ? m.path : m.path || '/var/lib/asterisk/moh');
     if (!published && isManagedMohPath(m.path) && !publishWarning) {
       publishWarning = true;
-      warnings.push(`Music on hold is not published: ${MOH_PUBLISH_DIR} is not mounted, so Asterisk reads ${m.path} only if it sees the same volume.`);
+      warnings.push(`Music on hold is not published: ${MOH_PUBLISH_DIR} does not hold this class's audio, so pointing Asterisk there would play silence. Classes use the console store path instead; mount the media/moh volume at ${MOH_PUBLISH_DIR} to publish them.`);
     }
     if (!hasReadableAudio(m.path || '')) {
       warnings.push(`Music class "${m.name}" points at ${m.path || MOH_PUBLISH_DIR}, which has no readable audio; callers will hear silence.`);

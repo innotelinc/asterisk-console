@@ -27,7 +27,8 @@ import {
 import {
   aiInfo, aiConfigured, buildRecording, buildJingle, transcribe, saveMedia, mediaPath, slugify,
   jingleDir, migrateJingleAudio, removeJingleAudio, removeRecordingFile,
-  ensureMusicAudio, recordingAudioPath, classAudioFile, hasReadableAudio, isManagedMohPath
+  ensureMusicAudio, recordingAudioPath, classAudioFile, hasReadableAudio, isManagedMohPath,
+  adoptPublishedAudio, MOH_PUBLISH_DIR
 } from './ai.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -960,9 +961,27 @@ try {
 // files that exist and the class actually plays.
 function normalizeMusicClasses() {
   const db = getDb();
+  const rows = db.prepare('SELECT id, name, path FROM music').all();
+
+  // A freshly mounted hold-music volume can hide audio that used to sit in the
+  // data volume. Restore it when the old copy is still reachable, and otherwise
+  // say exactly how to copy it once.
+  const adopted = adoptPublishedAudio();
+  if (adopted.length) {
+    console.log(`[startup] restored hold music from ${MOH_PUBLISH_DIR}: ${adopted.join(', ')}`);
+  } else {
+    const shadowed = rows.filter((row) => isManagedMohPath(row.path) && !hasReadableAudio(row.path));
+    if (shadowed.length) {
+      console.warn('[startup] music classes point at the media volume but it holds no audio. If you upgraded to the '
+        + 'pbx-moh volume, copy the old hold music once:\n'
+        + '  docker run --rm --user root -v <data-volume>:/from:ro -v <moh-volume>:/to asterisk-console '
+        + "sh -c 'cp -a /from/media/moh/. /to/'");
+    }
+  }
+
   let migrated = 0;
   let filled = 0;
-  for (const row of db.prepare('SELECT id, name, path FROM music').all()) {
+  for (const row of rows) {
     let path = row.path;
     let moved = false;
     try {

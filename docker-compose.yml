@@ -1,4 +1,22 @@
 services:
+  # One-off upgrade step: hold music used to live inside pbx-data, which the new
+  # pbx-moh mount would hide. Copy it across before the app starts; a no-op for
+  # fresh installs and when /var/lib/asterisk/moh is already populated.
+  moh-seed:
+    build: .
+    image: asterisk-console:latest
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ -n "$(ls -A /from/media/moh 2>/dev/null)" ] && [ -z "$(ls -A /to 2>/dev/null)" ]; then
+          cp -a /from/media/moh/. /to/ && echo "seeded hold music from the data volume"
+        fi
+    volumes:
+      - pbx-data:/from:ro
+      - pbx-moh:/to
+    restart: "no"
+
   asterisk-console:
     build: .
     image: asterisk-console:latest
@@ -23,6 +41,9 @@ services:
       OMNIROUTE_API_KEY: "${OMNIROUTE_API_KEY:-}"
       AI_TTS_MODEL: "${AI_TTS_MODEL:-google/gemini-2.5-flash-preview-tts}"
       AI_STT_MODEL: "${AI_STT_MODEL:-gemini/gemini-2.5-flash}"
+    depends_on:
+      moh-seed:
+        condition: service_completed_successfully
     volumes:
       - pbx-data:/data
       # The same audio at both paths: the console stores and serves it under

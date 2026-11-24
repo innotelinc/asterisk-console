@@ -105,6 +105,20 @@ A class is only auto-filled when it still uses the stock `/var/lib/asterisk/moh`
 the console's store and gets a generated bed when empty. A deliberately custom directory is never
 rewritten or written into — the config page warns when it holds no readable audio.
 
+The stock path is only written into `musiconhold.conf` when that directory really holds the class's
+audio; an unmounted or empty `/var/lib/asterisk/moh` keeps the console store path and raises a config
+warning instead of pointing Asterisk at silence.
+
+**Upgrading:** hold music used to live inside `pbx-data`. The new `pbx-moh` mount would hide it, so
+compose runs a one-off `moh-seed` service that copies `pbx-data/media/moh` into `pbx-moh` before the
+app starts (a no-op once it has audio). On a plain `docker run`, the app restores from the stock path
+when it can still see it, and otherwise logs the one-off copy to run:
+
+```
+docker run --rm --user root -v <data-volume>:/from:ro -v <moh-volume>:/to asterisk-console \
+  sh -c 'cp -a /from/media/moh/. /to/'
+```
+
 ### 4. Plug and play
 
 ```

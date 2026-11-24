@@ -345,7 +345,49 @@ export function publishMohPath(directory) {
   const dir = String(directory || '');
   if (!inside(MOH_ROOT, dir) || !existsSync(MOH_PUBLISH_DIR)) return null;
   const rel = relative(MOH_ROOT, dir);
-  return rel ? join(MOH_PUBLISH_DIR, rel) : null;
+  if (!rel) return null;
+  const published = join(MOH_PUBLISH_DIR, rel);
+  // Only trust the mapped path when it really holds this class's audio: an
+  // empty image directory or an unmounted volume must never become the config
+  // value, or Asterisk would be pointed at silence.
+  return hasReadableAudio(published) ? published : null;
+}
+
+/** Class directories under `root` that hold at least one WAV. */
+function audioClassDirs(root) {
+  if (!existsSync(root)) return [];
+  try {
+    return readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && hasReadableAudio(join(root, entry.name)))
+      .map((entry) => entry.name);
+  } catch {
+    return [];
+  }
+}
+
+/** True when the console's own store holds audio for at least one class. */
+export const storeHasAudio = () => audioClassDirs(MOH_ROOT).length > 0;
+
+/**
+ * A newly mounted hold-music volume shadows the audio that used to live in the
+ * data volume; when the old copy is still visible under MOH_PUBLISH_DIR, copy it
+ * into the store so an upgrade does not lose its music. No-op when both paths
+ * are the same volume or the store already has audio.
+ */
+export function adoptPublishedAudio() {
+  if (storeHasAudio()) return [];
+  const published = audioClassDirs(MOH_PUBLISH_DIR);
+  if (!published.length) return [];
+  for (const name of published) {
+    const from = join(MOH_PUBLISH_DIR, name);
+    const to = join(MOH_ROOT, name);
+    mkdirSync(to, { recursive: true });
+    for (const entry of readdirSync(from, { withFileTypes: true })) {
+      if (!entry.isFile() || !/\.wav$/i.test(entry.name)) continue;
+      copyFileSync(join(from, entry.name), join(to, entry.name));
+    }
+  }
+  return published;
 }
 
 /** Absolute path for a stored media file, or null when the request is unsafe. */
