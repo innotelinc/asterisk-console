@@ -1,0 +1,11 @@
+node_modules/
+web/dist/
+data*/
+.rea/
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.local
+.DS_Store
+npm-debug.log*

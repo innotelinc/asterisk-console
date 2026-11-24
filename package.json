@@ -1,0 +1,31 @@
+{
+  "name": "asterisk-console",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Asterisk Console — a modern, all-in-one replacement for the FreePBX admin GUI. No PHP.",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "dev": "node --watch server/index.js",
+    "dev:web": "vite --config web/vite.config.ts",
+    "build": "vite build --config web/vite.config.ts",
+    "start": "node server/index.js",
+    "docker:build": "docker build -t asterisk-console .",
+    "docker:run": "docker run -d --name asterisk-console -p 8080:8080 -v pbx-data:/data -e ADMIN_PASSWORD -e SESSION_SECRET asterisk-console"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.11"
+  }
+}

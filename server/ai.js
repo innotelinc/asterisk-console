@@ -1,0 +1,308 @@
+/**
+ * AI audio — recordings and music-on-hold jingles.
+ *
+ * Everything goes through one OpenAI-compatible gateway (OmniRoute), so the
+ * console has no audio SDK and no provider-specific code:
+ *
+ *   POST {base}/audio/speech        text  -> WAV (recordings)
+ *   POST {base}/chat/completions    audio -> text (voice input, transcript)
+ *
+ * A jingle is an AI-written tagline voiced by the TTS model over a synthesized
+ * music bed, because the gateway account used here exposes TTS but no music
+ * provider. The bed is generated locally, so the result is still new audio
+ * derived from the operator's text.
+ */
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+const DATA_DIR = process.env.DATA_DIR || '/data';
+export const MEDIA_DIR = join(DATA_DIR, 'media');
+
+const BASE = (process.env.OMNIROUTE_BASE_URL || 'https://gateway.innotel.us/v1').replace(/\/+$/, '');
+const KEY = process.env.OMNIROUTE_API_KEY || '';
+
+export const TTS_MODEL = process.env.AI_TTS_MODEL || 'google/gemini-2.5-flash-preview-tts';
+export const STT_MODEL = process.env.AI_STT_MODEL || 'gemini/gemini-2.5-flash';
+export const VOICES = ['Kore', 'Puck', 'Charon', 'Fenrir', 'Aoede', 'Leda', 'Orus', 'Zephyr'];
+
+/** Asterisk music-on-hold and prompts are 8 kHz mono in this build. */
+const OUT_RATE = 8000;
+
+export const aiConfigured = () => Boolean(KEY);
+
+export const aiInfo = () => ({
+  configured: aiConfigured(),
+  ttsModel: TTS_MODEL,
+  sttModel: STT_MODEL,
+  voices: VOICES,
+  output: `${OUT_RATE} Hz mono WAV`
+});
+
+function gatewayError(status, body) {
+  const message = body?.error?.message || `Audio gateway returned ${status}`;
+  return Object.assign(new Error(message), { status: status === 401 || status === 403 ? 502 : 502 });
+}
+
+async function gateway(path, init) {
+  if (!KEY) {
+    throw Object.assign(new Error('AI audio is not configured: set OMNIROUTE_API_KEY'), { status: 503 });
+  }
+  let res;
+  try {
+    res = await fetch(`${BASE}${path}`, {
+      ...init,
+      headers: { authorization: `Bearer ${KEY}`, ...(init.headers || {}) },
+      signal: AbortSignal.timeout(120000)
+    });
+  } catch (err) {
+    throw Object.assign(new Error(`Audio gateway unreachable: ${err.message}`), { status: 502 });
+  }
+  if (!res.ok) {
+    let body = null;
+    try { body = await res.json(); } catch {}
+    throw gatewayError(res.status, body);
+  }
+  return res;
+}
+
+// --------------------------------------------------------------- WAV helpers
+/** Parse a PCM WAV buffer into mono float samples. */
+export function parseWav(buffer) {
+  if (buffer.length < 44 || buffer.toString('ascii', 0, 4) !== 'RIFF' || buffer.toString('ascii', 8, 12) !== 'WAVE') {
+    throw Object.assign(new Error('Audio gateway did not return a WAV file'), { status: 502 });
+  }
+  let offset = 12;
+  let fmt = null;
+  let data = null;
+  while (offset + 8 <= buffer.length) {
+    const id = buffer.toString('ascii', offset, offset + 4);
+    const size = buffer.readUInt32LE(offset + 4);
+    const body = offset + 8;
+    if (id === 'fmt ') {
+      fmt = {
+        format: buffer.readUInt16LE(body),
+        channels: buffer.readUInt16LE(body + 2),
+        rate: buffer.readUInt32LE(body + 4),
+        bits: buffer.readUInt16LE(body + 14)
+      };
+    } else if (id === 'data') {
+      data = { start: body, size: Math.min(size, buffer.length - body) };
+    }
+    offset = body + size + (size % 2);
+  }
+  if (!fmt || !data) throw Object.assign(new Error('WAV file is missing fmt/data chunks'), { status: 502 });
+  if (fmt.bits !== 16 || fmt.format !== 1) {
+    throw Object.assign(new Error(`Unsupported WAV encoding (${fmt.bits}-bit format ${fmt.format})`), { status: 502 });
+  }
+  const frames = Math.floor(data.size / (2 * fmt.channels));
+  const mono = new Float32Array(frames);
+  for (let i = 0; i < frames; i += 1) {
+    let sum = 0;
+    for (let c = 0; c < fmt.channels; c += 1) {
+      sum += buffer.readInt16LE(data.start + (i * fmt.channels + c) * 2) / 32768;
+    }
+    mono[i] = sum / fmt.channels;
+  }
+  return { samples: mono, rate: fmt.rate };
+}
+
+/** Linear resample to the output rate. */
+function resample(samples, from, to = OUT_RATE) {
+  if (from === to) return samples;
+  const ratio = from / to;
+  const out = new Float32Array(Math.max(1, Math.floor(samples.length / ratio)));
+  for (let i = 0; i < out.length; i += 1) {
+    const pos = i * ratio;
+    const idx = Math.floor(pos);
+    const frac = pos - idx;
+    const a = samples[idx] ?? 0;
+    const b = samples[idx + 1] ?? a;
+    out[i] = a + (b - a) * frac;
+  }
+  return out;
+}
+
+/** Encode float samples as a 16-bit mono WAV. */
+export function encodeWav(samples, rate = OUT_RATE) {
+  const buffer = Buffer.alloc(44 + samples.length * 2);
+  buffer.write('RIFF', 0, 'ascii');
+  buffer.writeUInt32LE(36 + samples.length * 2, 4);
+  buffer.write('WAVE', 8, 'ascii');
+  buffer.write('fmt ', 12, 'ascii');
+  buffer.writeUInt32LE(16, 16);
+  buffer.writeUInt16LE(1, 20);
+  buffer.writeUInt16LE(1, 22);
+  buffer.writeUInt32LE(rate, 24);
+  buffer.writeUInt32LE(rate * 2, 28);
+  buffer.writeUInt16LE(2, 32);
+  buffer.writeUInt16LE(16, 34);
+  buffer.write('data', 36, 'ascii');
+  buffer.writeUInt32LE(samples.length * 2, 40);
+  for (let i = 0; i < samples.length; i += 1) {
+    const clamped = Math.max(-1, Math.min(1, samples[i]));
+    buffer.writeInt16LE(Math.round(clamped * 32767), 44 + i * 2);
+  }
+  return buffer;
+}
+
+// ------------------------------------------------------------- gateway calls
+/** Text to speech. Returns mono samples at the gateway's rate. */
+export async function synthesize(text, voice = 'Kore') {
+  const res = await gateway('/audio/speech', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: TTS_MODEL, input: text, voice })
+  });
+  const buffer = Buffer.from(await res.arrayBuffer());
+  return parseWav(buffer);
+}
+
+/** Speech to text from a WAV/MP3/OGG body. */
+export async function transcribe(buffer, format = 'wav') {
+  const res = await gateway('/chat/completions', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: STT_MODEL,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: 'Transcribe this audio exactly. Reply with the spoken words only, no commentary.' },
+          { type: 'input_audio', input_audio: { data: buffer.toString('base64'), format } }
+        ]
+      }]
+    })
+  });
+  const body = await res.json();
+  const text = String(body?.choices?.[0]?.message?.content || '').trim().replace(/^["'`]|["'`]$/g, '');
+  if (!text) throw Object.assign(new Error('The transcription came back empty'), { status: 502 });
+  return text;
+}
+
+/** Ask the text model for a one-line jingle tagline. */
+async function writeTagline(prompt) {
+  try {
+    const res = await gateway('/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: STT_MODEL,
+        messages: [{
+          role: 'user',
+          content: `Write one spoken music-on-hold jingle line for this brief: "${prompt}". `
+            + 'Maximum 12 words, no quotation marks, no stage directions, no emoji. Reply with the line only.'
+        }]
+      })
+    });
+    const body = await res.json();
+    const line = String(body?.choices?.[0]?.message?.content || '').trim().split('\n')[0]
+      .replace(/^["'`]+|["'`]+$/g, '').trim();
+    if (line) return line.slice(0, 140);
+  } catch {}
+  return prompt.trim().slice(0, 120);
+}
+
+// ---------------------------------------------------------------- music bed
+const midi = (n) => 440 * 2 ** ((n - 69) / 12);
+
+/** Plucked note with a few harmonics and an exponential decay. */
+function addNote(out, startSec, durSec, note, gain, rate = OUT_RATE) {
+  const start = Math.floor(startSec * rate);
+  const len = Math.min(Math.floor(durSec * rate), out.length - start);
+  if (len <= 0) return;
+  const freq = midi(note);
+  for (let i = 0; i < len; i += 1) {
+    const t = i / rate;
+    const env = Math.exp(-3.2 * t) * (1 - Math.exp(-140 * t));
+    const w = Math.sin(2 * Math.PI * freq * t)
+      + 0.42 * Math.sin(4 * Math.PI * freq * t)
+      + 0.18 * Math.sin(6 * Math.PI * freq * t);
+    out[start + i] += w * env * gain;
+  }
+}
+
+/** Two-bar-turnaround progression (C – G – Am – F) with arpeggio, bass and pad. */
+function musicBed(seconds) {
+  const total = Math.floor(seconds * OUT_RATE);
+  const out = new Float32Array(total);
+  const chords = [
+    [48, 52, 55, 60],
+    [43, 47, 50, 55],
+    [45, 48, 52, 57],
+    [41, 45, 48, 53]
+  ];
+  const bar = 1.8;
+  let t = 0;
+  let index = 0;
+  while (t < seconds) {
+    const chord = chords[index % chords.length];
+    // Bass on the downbeat.
+    addNote(out, t, bar * 0.95, chord[0] - 12, 0.30);
+    // Arpeggio, eight notes per bar.
+    for (let step = 0; step < 8; step += 1) {
+      const note = chord[step % chord.length] + (step >= 4 ? 12 : 0);
+      addNote(out, t + step * (bar / 8), bar / 4, note, 0.16);
+    }
+    // Soft pad underneath.
+    for (const note of chord) addNote(out, t, bar, note, 0.055);
+    t += bar;
+    index += 1;
+  }
+  for (let i = 0; i < total; i += 1) {
+    const fade = Math.min(1, i / (OUT_RATE * 0.35)) * Math.min(1, (total - i) / (OUT_RATE * 0.6));
+    out[i] = Math.tanh(out[i] * 1.15) * fade;
+  }
+  return out;
+}
+
+// ------------------------------------------------------------------ builders
+/** Build a spoken recording (WAV buffer at 8 kHz mono). */
+export async function buildRecording({ text, voice }) {
+  const speech = await synthesize(text, voice);
+  const samples = resample(speech.samples, speech.rate);
+  return encodeWav(samples);
+}
+
+/** Build a jingle: AI tagline + TTS voice over a synthesized bed. */
+export async function buildJingle({ prompt, voice }) {
+  const tagline = await writeTagline(prompt);
+  let voiced = null;
+  try {
+    const speech = await synthesize(tagline, voice);
+    voiced = resample(speech.samples, speech.rate);
+  } catch {
+    voiced = null;
+  }
+  const voiceSeconds = voiced ? voiced.length / OUT_RATE : 0;
+  const seconds = Math.max(9, voiceSeconds + 3.2);
+  const bed = musicBed(seconds);
+  const out = new Float32Array(bed.length);
+  const lead = Math.floor(0.45 * OUT_RATE);
+  for (let i = 0; i < out.length; i += 1) {
+    const v = voiced && i >= lead && i - lead < voiced.length ? voiced[i - lead] * 0.92 : 0;
+    out[i] = Math.max(-1, Math.min(1, bed[i] * 0.42 + v));
+  }
+  return { wav: encodeWav(out), tagline, seconds };
+}
+
+// ------------------------------------------------------------------- storage
+export const slugify = (value) => String(value || 'audio')
+  .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'audio';
+
+const MEDIA_KINDS = new Set(['recordings', 'moh']);
+
+/** Absolute path for a stored media file, or null when the request is unsafe. */
+export function mediaPath(kind, file) {
+  if (!MEDIA_KINDS.has(kind)) return null;
+  if (!/^[a-z0-9][a-z0-9._-]*$/i.test(String(file || ''))) return null;
+  return join(MEDIA_DIR, kind, String(file));
+}
+
+/** Persist generated audio and return its file name. */
+export function saveMedia(kind, name, wav) {
+  const dir = join(MEDIA_DIR, kind);
+  mkdirSync(dir, { recursive: true });
+  const file = `${slugify(name)}-${Date.now().toString(36)}.wav`;
+  writeFileSync(join(dir, file), wav);
+  return file;
+}

@@ -1,0 +1,36 @@
+services:
+  asterisk-console:
+    build: .
+    image: asterisk-console:latest
+    container_name: asterisk-console
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # The only source of the first administrator's password. Omit it and the
+      # first-run setup screen creates the account instead — there is no default.
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-}"
+      ADMIN_USER: "${ADMIN_USER:-admin}"
+      # Seed a working demo configuration on an empty database.
+      SEED_DEMO: "${SEED_DEMO:-1}"
+      # Set a long random value so sessions survive container restarts.
+      SESSION_SECRET: "${SESSION_SECRET:-}"
+      # Only set to 1 behind a trusted reverse proxy (honours X-Forwarded-For).
+      TRUST_PROXY: "${TRUST_PROXY:-0}"
+      # AI audio (generated recordings and music-on-hold jingles). Any
+      # OpenAI-compatible gateway works; the key stays in your .env.
+      OMNIROUTE_BASE_URL: "${OMNIROUTE_BASE_URL:-https://gateway.innotel.us/v1}"
+      OMNIROUTE_API_KEY: "${OMNIROUTE_API_KEY:-}"
+      AI_TTS_MODEL: "${AI_TTS_MODEL:-google/gemini-2.5-flash-preview-tts}"
+      AI_STT_MODEL: "${AI_STT_MODEL:-gemini/gemini-2.5-flash}"
+    volumes:
+      - pbx-data:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  pbx-data:
