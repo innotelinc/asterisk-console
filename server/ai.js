@@ -12,11 +12,20 @@
  * provider. The bed is generated locally, so the result is still new audio
  * derived from the operator's text.
  */
-import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { join, resolve, sep } from 'node:path';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { join, relative, resolve, sep } from 'node:path';
 
 const DATA_DIR = process.env.DATA_DIR || '/data';
 export const MEDIA_DIR = join(DATA_DIR, 'media');
+
+/** The console's own music-on-hold store. */
+export const MOH_ROOT = join(MEDIA_DIR, 'moh');
+
+/** Where a real Asterisk reads hold music; the same volume should be mounted here. */
+export const MOH_PUBLISH_DIR = (process.env.MOH_PUBLISH_DIR || '/var/lib/asterisk/moh').replace(/\/+$/, '');
+
+/** The stock directory Asterisk is configured with out of the box. */
+const DEFAULT_MOH_DIR = '/var/lib/asterisk/moh';
 
 const BASE = (process.env.OMNIROUTE_BASE_URL || 'https://gateway.innotel.us/v1').replace(/\/+$/, '');
 const KEY = process.env.OMNIROUTE_API_KEY || '';
@@ -311,7 +320,32 @@ function inside(root, target) {
 
 /** Directory holding a music class's generated jingle. */
 export function jingleDir(className) {
-  return join(MEDIA_DIR, 'moh', slugify(className));
+  return join(MOH_ROOT, slugify(className));
+}
+
+/**
+ * True when a stored path is just the stock Asterisk default (or the pre-fix
+ * per-class path the generator used to write), i.e. a value nobody chose. A
+ * deliberately set custom directory is not default.
+ */
+export function isDefaultMohPath(directory, className) {
+  const dir = String(directory || '').replace(/\/+$/, '');
+  if (!dir || dir === DEFAULT_MOH_DIR) return true;
+  return Boolean(className) && dir === `${DEFAULT_MOH_DIR}/${slugify(className)}`;
+}
+
+/** True when the path is inside the console's own music store. */
+export const isManagedMohPath = (directory) => inside(MOH_ROOT, String(directory || ''));
+
+/**
+ * Map a stored class directory to the path Asterisk reads, but only when that
+ * path is actually mounted; otherwise the stored path is the honest answer.
+ */
+export function publishMohPath(directory) {
+  const dir = String(directory || '');
+  if (!inside(MOH_ROOT, dir) || !existsSync(MOH_PUBLISH_DIR)) return null;
+  const rel = relative(MOH_ROOT, dir);
+  return rel ? join(MOH_PUBLISH_DIR, rel) : null;
 }
 
 /** Absolute path for a stored media file, or null when the request is unsafe. */
@@ -319,8 +353,9 @@ export function mediaPath(kind, file) {
   if (!MEDIA_KINDS.has(kind)) return null;
   const parts = String(file || '').split('/');
   if (parts.length > 2 || !parts.every((part) => SAFE_SEGMENT.test(part))) return null;
-  const path = join(MEDIA_DIR, kind, ...parts);
-  return inside(join(MEDIA_DIR, kind), path) ? path : null;
+  const root = kind === 'moh' ? MOH_ROOT : join(MEDIA_DIR, kind);
+  const path = join(root, ...parts);
+  return inside(root, path) ? path : null;
 }
 
 /** Persist generated audio and return its file name. */
@@ -328,7 +363,8 @@ export function saveMedia(kind, name, wav, subdir) {
   if (subdir !== undefined && !SAFE_SEGMENT.test(String(subdir))) {
     throw Object.assign(new Error('Invalid media directory'), { status: 400 });
   }
-  const dir = subdir ? join(MEDIA_DIR, kind, String(subdir)) : join(MEDIA_DIR, kind);
+  const root = kind === 'moh' ? MOH_ROOT : join(MEDIA_DIR, kind);
+  const dir = subdir ? join(root, String(subdir)) : root;
   mkdirSync(dir, { recursive: true });
   const file = `${slugify(name)}-${Date.now().toString(36)}.wav`;
   writeFileSync(join(dir, file), wav);
@@ -336,7 +372,7 @@ export function saveMedia(kind, name, wav, subdir) {
 }
 
 /** True when `dir` exists and holds at least one WAV. */
-function hasWav(dir) {
+export function hasReadableAudio(dir) {
   if (!dir || !existsSync(dir)) return false;
   try {
     return readdirSync(dir, { withFileTypes: true })
@@ -355,13 +391,26 @@ function hasWav(dir) {
 export function ensureMusicAudio(directory, className, seconds = 24) {
   if (!className) return null;
   const current = String(directory || '');
-  const inMedia = inside(join(MEDIA_DIR, 'moh'), current);
-  const dir = inMedia ? current : jingleDir(className);
-  if (hasWav(dir)) return inMedia ? null : dir;
-  if (!inMedia && hasWav(current)) return null;
+
+  if (inside(MOH_ROOT, current)) {
+    if (hasReadableAudio(current)) return null;
+    writeHoldMusic(current, className, seconds);
+    return current;
+  }
+
+  // A custom directory is the operator's choice: never rewrite it or write
+  // into it. Only the stock default is relocated onto the console's store.
+  if (!isDefaultMohPath(current, className)) return null;
+
+  const dir = jingleDir(className);
+  if (hasReadableAudio(dir)) return dir;
+  writeHoldMusic(dir, className, seconds);
+  return dir;
+}
+
+function writeHoldMusic(dir, className, seconds) {
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, `${slugify(className)}-${Date.now().toString(36)}.wav`), buildHoldMusic(className, seconds));
-  return dir;
 }
 
 /** Absolute WAV path for a recording row, or null when it is not on the volume. */
@@ -375,7 +424,7 @@ export function recordingAudioPath(filename) {
 /** Absolute path of the first WAV in a music class directory, or null. */
 export function classAudioFile(directory) {
   const dir = String(directory || '');
-  if (!inside(join(MEDIA_DIR, 'moh'), dir) || !existsSync(dir)) return null;
+  if (!inside(MOH_ROOT, dir) || !existsSync(dir)) return null;
   const entry = readdirSync(dir, { withFileTypes: true })
     .filter((item) => item.isFile() && /\.wav$/i.test(item.name))
     .sort((a, b) => a.name.localeCompare(b.name))[0];
@@ -390,7 +439,7 @@ export function classAudioFile(directory) {
  * the shared moh folder, so those are matched by the class's generated name.
  */
 export function removeJingleAudio(directory, className) {
-  const mohRoot = join(MEDIA_DIR, 'moh');
+  const mohRoot = MOH_ROOT;
   let removed = false;
 
   if (directory && inside(mohRoot, directory)) {
@@ -430,29 +479,33 @@ export function removeJingleAudio(directory, className) {
  */
 export function migrateJingleAudio(directory, className) {
   if (!className) return null;
-  const mohRoot = join(MEDIA_DIR, 'moh');
-  const current = String(directory || '');
-  // Already points at the media volume, or is not a per-class Asterisk path
-  // (the seeded "default" class points at the moh root itself).
-  if (inside(mohRoot, current) || !/(^|\/)moh\/[^/]+$/.test(current)) return null;
+  const current = String(directory || '').replace(/\/+$/, '');
+  // Only the exact path the pre-fix generator wrote: /var/lib/asterisk/moh/<class>.
+  // Anything else is either already stored here or a deliberate custom path.
+  if (current !== `${DEFAULT_MOH_DIR}/${slugify(className)}`) return null;
 
   const target = jingleDir(className);
   const prefix = `${slugify(className)}-`;
   let moved = 0;
-  if (existsSync(mohRoot)) {
-    for (const entry of readdirSync(mohRoot, { withFileTypes: true })) {
+  if (existsSync(MOH_ROOT)) {
+    for (const entry of readdirSync(MOH_ROOT, { withFileTypes: true })) {
       if (!entry.isFile() || !entry.name.startsWith(prefix)) continue;
       const stamp = entry.name.slice(prefix.length).replace(/\.wav$/i, '');
       if (!/^[a-z0-9]+$/i.test(stamp)) continue;
       mkdirSync(target, { recursive: true });
-      renameSync(join(mohRoot, entry.name), join(target, entry.name));
+      const from = join(MOH_ROOT, entry.name);
+      const to = join(target, entry.name);
+      try {
+        renameSync(from, to);
+      } catch {
+        // Different filesystems (or a mounted volume): copy then remove.
+        copyFileSync(from, to);
+        rmSync(from, { force: true });
+      }
       moved += 1;
     }
   }
-  // An earlier run may already have moved the audio without storing the path.
-  const hasAudio = existsSync(target)
-    && readdirSync(target, { withFileTypes: true }).some((entry) => entry.isFile() && /\.wav$/i.test(entry.name));
-  if (!moved && !hasAudio) return null;
+  if (!moved && !hasReadableAudio(target)) return null;
   return target;
 }
 

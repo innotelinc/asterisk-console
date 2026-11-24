@@ -13,7 +13,7 @@
     "build": "vite build --config web/vite.config.ts",
     "start": "node server/index.js",
     "docker:build": "docker build -t asterisk-console .",
-    "docker:run": "docker run -d --name asterisk-console -p 8080:8080 -v pbx-data:/data -e ADMIN_PASSWORD -e SESSION_SECRET asterisk-console"
+    "docker:run": "docker run -d --name asterisk-console -p 8080:8080 -v pbx-data:/data -v pbx-moh:/data/media/moh -v pbx-moh:/var/lib/asterisk/moh -e ADMIN_PASSWORD -e SESSION_SECRET asterisk-console"
   },
   "dependencies": {
     "express": "^4.21.2"

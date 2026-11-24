@@ -27,7 +27,7 @@ import {
 import {
   aiInfo, aiConfigured, buildRecording, buildJingle, transcribe, saveMedia, mediaPath, slugify,
   jingleDir, migrateJingleAudio, removeJingleAudio, removeRecordingFile,
-  ensureMusicAudio, recordingAudioPath, classAudioFile
+  ensureMusicAudio, recordingAudioPath, classAudioFile, hasReadableAudio, isManagedMohPath
 } from './ai.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -973,6 +973,9 @@ function normalizeMusicClasses() {
     } catch (err) {
       console.error(`[startup] could not prepare music class "${row.name}": ${err.message}`);
       continue;
+    }
+    if (!isManagedMohPath(path) && !hasReadableAudio(path)) {
+      console.warn(`[startup] music class "${row.name}" points at ${path || '(empty)'}, which has no readable audio; calls will hear silence.`);
     }
     if (path === row.path) continue;
     db.prepare("UPDATE music SET path = ?, updated_at = datetime('now') WHERE id = ?").run(path, row.id);

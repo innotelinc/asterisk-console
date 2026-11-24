@@ -88,8 +88,22 @@ routes through one OpenAI-compatible gateway (set `OMNIROUTE_BASE_URL`, default
 - **Music on Hold → Generate jingle**: the model writes a one-line tagline from your brief, voices
   it, and mixes it over a synthesized music bed, then creates or updates the music class.
 
-Generated files live in `/data/media/{recordings,moh}` and are served to signed-in users at
-`/api/media/…`; sync them to your Asterisk sounds directory to use them on a real PBX.
+Generated files live in `/data/media/moh/<class>` (hold music) and `/data/media/recordings`, and are
+served to signed-in users at `/api/media/…` with a **Preview** action on each record.
+
+`docker-compose.yml` mounts the `pbx-moh` volume at both `/data/media/moh` and the stock Asterisk
+hold-music path `/var/lib/asterisk/moh`, and `musiconhold.conf` names the stock path, so generated
+hold music plays without a manual copy. With a plain `docker run`, add both mounts:
+
+```
+docker run -d --name asterisk-console -p 8080:8080 \
+  -v pbx-data:/data -v pbx-moh:/data/media/moh -v pbx-moh:/var/lib/asterisk/moh \
+  -e ADMIN_PASSWORD -e SESSION_SECRET asterisk-console
+```
+
+A class is only auto-filled when it still uses the stock `/var/lib/asterisk/moh` default: it moves to
+the console's store and gets a generated bed when empty. A deliberately custom directory is never
+rewritten or written into — the config page warns when it holds no readable audio.
 
 ### 4. Plug and play
 

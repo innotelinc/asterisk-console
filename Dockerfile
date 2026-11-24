@@ -25,8 +25,10 @@ RUN npm install --omit=dev --no-audit --no-fund && npm cache clean --force
 COPY server ./server
 COPY --from=build /app/web/dist ./web/dist
 
-# Unprivileged runtime, persistent volume for the database.
-RUN mkdir -p /data && chown -R node:node /app /data
+# Unprivileged runtime, persistent volume for the database. The stock Asterisk
+# music-on-hold path is owned by the runtime user so a volume can be mounted
+# there and receive the generated audio.
+RUN mkdir -p /data /var/lib/asterisk/moh && chown -R node:node /app /data /var/lib/asterisk
 USER node
 VOLUME ["/data"]
 

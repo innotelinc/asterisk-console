@@ -25,6 +25,10 @@ services:
       AI_STT_MODEL: "${AI_STT_MODEL:-gemini/gemini-2.5-flash}"
     volumes:
       - pbx-data:/data
+      # The same audio at both paths: the console stores and serves it under
+      # /data/media/moh, and Asterisk finds it at its stock hold-music path.
+      - pbx-moh:/data/media/moh
+      - pbx-moh:/var/lib/asterisk/moh
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
@@ -34,3 +38,4 @@ services:
 
 volumes:
   pbx-data:
+  pbx-moh:
