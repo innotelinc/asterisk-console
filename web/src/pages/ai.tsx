@@ -325,7 +325,7 @@ function JingleModal({ onClose, onDone }: { onClose: () => void; onDone: () => P
           <div className="field">
             <label>Jingle · {Math.round(result.seconds)}s</label>
             <audio controls src={result.file} style={{ width: '100%' }} />
-            <span className="hint">Music class directory: <span className="mono">{result.directory}</span></span>
+            <span className="hint">The WAV is stored in the class directory: <span className="mono">{result.directory}</span></span>
           </div>
           <a className="btn" href={result.file} download>
             <Icon name="Download" size={15} /> Download WAV

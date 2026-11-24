@@ -25,7 +25,8 @@ import {
   generateConfigs, testDialplan, hostStats, refreshAmi, getAmiState, amiConfigured
 } from './asterisk.js';
 import {
-  aiInfo, aiConfigured, buildRecording, buildJingle, transcribe, saveMedia, mediaPath, slugify
+  aiInfo, aiConfigured, buildRecording, buildJingle, transcribe, saveMedia, mediaPath, slugify,
+  jingleDir, removeJingleDir, removeRecordingFile
 } from './ai.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -419,7 +420,12 @@ app.delete('/api/entities/:entity/:id', requireRole('operator'), (req, res) => {
       return res.status(400).json({ error: 'At least one enabled administrator is required' });
     }
   }
+  // Read the row first: recordings and music classes own a generated WAV that
+  // has to go with them.
+  const doomed = db.prepare(`SELECT * FROM ${name} WHERE id = ?`).get(id);
   db.prepare(`DELETE FROM ${name} WHERE id = ?`).run(id);
+  if (name === 'recordings' && doomed) removeRecordingFile(doomed.filename);
+  if (name === 'music' && doomed) removeJingleDir(doomed.path);
   audit({ actor: req.session.username, action: 'delete', entity: name, entityId: id, ip: req.ip });
   res.json({ ok: true });
 });
@@ -592,8 +598,9 @@ app.post('/api/ai/jingle', requireRole('operator'), async (req, res, next) => {
     if (!brief) return res.status(400).json({ error: 'Describe the jingle you want' });
     const className = slugify(req.body?.name || 'jingle');
     const { wav, tagline, seconds } = await buildJingle({ prompt: brief, voice: req.body?.voice });
-    const file = saveMedia('moh', req.body?.name || 'jingle', wav);
-    const directory = `/var/lib/asterisk/moh/${className}`;
+    // The class points at this exact directory, so the WAV has to live in it.
+    const directory = jingleDir(className);
+    const file = saveMedia('moh', req.body?.name || 'jingle', wav, className);
     const db = getDb();
     let row = db.prepare('SELECT * FROM music WHERE name = ?').get(className);
     if (row) {
@@ -606,7 +613,7 @@ app.post('/api/ai/jingle', requireRole('operator'), async (req, res, next) => {
     audit({ actor: req.session.username, action: 'ai_jingle', entity: 'music', entityId: row.id, detail: { className, tagline, seconds, voice: req.body?.voice }, ip: req.ip });
     res.status(201).json({
       row: redact('music', db.prepare('SELECT * FROM music WHERE id = ?').get(row.id), req.session),
-      file: `/api/media/moh/${file}`,
+      file: `/api/media/moh/${className}/${file}`,
       tagline,
       seconds,
       directory
@@ -614,13 +621,17 @@ app.post('/api/ai/jingle', requireRole('operator'), async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-app.get('/api/media/:kind/:file', (req, res) => {
-  const file = mediaPath(req.params.kind, req.params.file);
+function sendMedia(req, res, name) {
+  const file = mediaPath(req.params.kind, name);
   if (!file || !existsSync(file)) return res.status(404).json({ error: 'Audio file not found' });
   res.setHeader('Content-Type', 'audio/wav');
   res.setHeader('Cache-Control', 'private, max-age=300');
   res.sendFile(file);
-});
+}
+
+// Jingles live in their music class's own directory, so the path has a segment.
+app.get('/api/media/:kind/:dir/:file', (req, res) => sendMedia(req, res, `${req.params.dir}/${req.params.file}`));
+app.get('/api/media/:kind/:file', (req, res) => sendMedia(req, res, req.params.file));
 
 // ---------------------------------------------------------------------------
 // Config generation + dialplan test

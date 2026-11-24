@@ -12,8 +12,8 @@
  * provider. The bed is generated locally, so the result is still new audio
  * derived from the operator's text.
  */
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join, resolve, sep } from 'node:path';
 
 const DATA_DIR = process.env.DATA_DIR || '/data';
 export const MEDIA_DIR = join(DATA_DIR, 'media');
@@ -290,19 +290,55 @@ export const slugify = (value) => String(value || 'audio')
   .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'audio';
 
 const MEDIA_KINDS = new Set(['recordings', 'moh']);
+const SAFE_SEGMENT = /^[a-z0-9][a-z0-9._-]*$/i;
+
+/** True when `target` resolves inside `root`. */
+function inside(root, target) {
+  const base = resolve(root);
+  const path = resolve(target);
+  return path !== base && path.startsWith(base + sep);
+}
+
+/** Directory holding a music class's generated jingle. */
+export function jingleDir(className) {
+  return join(MEDIA_DIR, 'moh', slugify(className));
+}
 
 /** Absolute path for a stored media file, or null when the request is unsafe. */
 export function mediaPath(kind, file) {
   if (!MEDIA_KINDS.has(kind)) return null;
-  if (!/^[a-z0-9][a-z0-9._-]*$/i.test(String(file || ''))) return null;
-  return join(MEDIA_DIR, kind, String(file));
+  const parts = String(file || '').split('/');
+  if (parts.length > 2 || !parts.every((part) => SAFE_SEGMENT.test(part))) return null;
+  const path = join(MEDIA_DIR, kind, ...parts);
+  return inside(join(MEDIA_DIR, kind), path) ? path : null;
 }
 
 /** Persist generated audio and return its file name. */
-export function saveMedia(kind, name, wav) {
-  const dir = join(MEDIA_DIR, kind);
+export function saveMedia(kind, name, wav, subdir) {
+  if (subdir !== undefined && !SAFE_SEGMENT.test(String(subdir))) {
+    throw Object.assign(new Error('Invalid media directory'), { status: 400 });
+  }
+  const dir = subdir ? join(MEDIA_DIR, kind, String(subdir)) : join(MEDIA_DIR, kind);
   mkdirSync(dir, { recursive: true });
   const file = `${slugify(name)}-${Date.now().toString(36)}.wav`;
   writeFileSync(join(dir, file), wav);
   return file;
+}
+
+/** Delete a music class's generated jingle files, never anything outside the media volume. */
+export function removeJingleDir(directory) {
+  if (!directory) return false;
+  if (!inside(join(MEDIA_DIR, 'moh'), directory)) return false;
+  rmSync(directory, { recursive: true, force: true });
+  return true;
+}
+
+/** Delete the stored WAV behind a recording row (`filename` is relative to the sounds dir). */
+export function removeRecordingFile(filename) {
+  const base = String(filename || '').split(/[\\/]/).pop().replace(/\.wav$/i, '');
+  if (!SAFE_SEGMENT.test(base)) return false;
+  const path = join(MEDIA_DIR, 'recordings', `${base}.wav`);
+  if (!inside(join(MEDIA_DIR, 'recordings'), path)) return false;
+  rmSync(path, { force: true });
+  return true;
 }
