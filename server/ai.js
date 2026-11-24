@@ -12,7 +12,7 @@
  * provider. The bed is generated locally, so the result is still new audio
  * derived from the operator's text.
  */
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 
 const DATA_DIR = process.env.DATA_DIR || '/data';
@@ -363,6 +363,40 @@ export function removeJingleAudio(directory, className) {
     }
   }
   return removed;
+}
+
+/**
+ * Move a pre-fix class's leftover audio into its own directory and return the
+ * new path, or null when there is nothing to migrate. Pre-fix classes point at
+ * /var/lib/asterisk/moh/<class> (where nothing was ever written) while their
+ * WAV sits flat in the shared moh folder, so the class would play silence.
+ */
+export function migrateJingleAudio(directory, className) {
+  if (!className) return null;
+  const mohRoot = join(MEDIA_DIR, 'moh');
+  const current = String(directory || '');
+  // Already points at the media volume, or is not a per-class Asterisk path
+  // (the seeded "default" class points at the moh root itself).
+  if (inside(mohRoot, current) || !/(^|\/)moh\/[^/]+$/.test(current)) return null;
+
+  const target = jingleDir(className);
+  const prefix = `${slugify(className)}-`;
+  let moved = 0;
+  if (existsSync(mohRoot)) {
+    for (const entry of readdirSync(mohRoot, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.startsWith(prefix)) continue;
+      const stamp = entry.name.slice(prefix.length).replace(/\.wav$/i, '');
+      if (!/^[a-z0-9]+$/i.test(stamp)) continue;
+      mkdirSync(target, { recursive: true });
+      renameSync(join(mohRoot, entry.name), join(target, entry.name));
+      moved += 1;
+    }
+  }
+  // An earlier run may already have moved the audio without storing the path.
+  const hasAudio = existsSync(target)
+    && readdirSync(target, { withFileTypes: true }).some((entry) => entry.isFile() && /\.wav$/i.test(entry.name));
+  if (!moved && !hasAudio) return null;
+  return target;
 }
 
 /** Delete the stored WAV behind a recording row (`filename` is relative to the sounds dir). */

@@ -26,7 +26,7 @@ import {
 } from './asterisk.js';
 import {
   aiInfo, aiConfigured, buildRecording, buildJingle, transcribe, saveMedia, mediaPath, slugify,
-  jingleDir, removeJingleAudio, removeRecordingFile
+  jingleDir, migrateJingleAudio, removeJingleAudio, removeRecordingFile
 } from './ai.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -923,6 +923,38 @@ try {
 } catch (err) {
   console.error(`[startup] ${err.message}`);
   process.exit(1);
+}
+
+// ---------------------------------------------------------------------------
+// One-time music-on-hold media migration
+// ---------------------------------------------------------------------------
+// Classes generated before jingles had their own directory point at an Asterisk
+// path that holds no audio, while their WAV sits flat in the media volume. Move
+// it into the class directory and store that path, so musiconhold.conf points at
+// files that exist and the class actually plays.
+function migrateLegacyJingles() {
+  const db = getDb();
+  let migrated = 0;
+  for (const row of db.prepare('SELECT id, name, path FROM music').all()) {
+    let directory = null;
+    try {
+      directory = migrateJingleAudio(row.path, row.name);
+    } catch (err) {
+      console.error(`[startup] could not migrate music class "${row.name}": ${err.message}`);
+      continue;
+    }
+    if (!directory) continue;
+    db.prepare("UPDATE music SET path = ?, updated_at = datetime('now') WHERE id = ?").run(directory, row.id);
+    console.log(`[startup] moved music class "${row.name}" audio to ${directory}`);
+    migrated += 1;
+  }
+  if (migrated) audit({ actor: 'system', action: 'migrate', entity: 'music', detail: { classes: migrated } });
+}
+
+try {
+  migrateLegacyJingles();
+} catch (err) {
+  console.error(`[startup] music migration failed: ${err.message}`);
 }
 
 const server = app.listen(PORT, HOST, () => {
