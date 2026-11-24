@@ -111,8 +111,8 @@ warning instead of pointing Asterisk at silence.
 
 **Upgrading:** hold music used to live inside `pbx-data`. The new `pbx-moh` mount would hide it, so
 compose runs a one-off `moh-seed` service that copies `pbx-data/media/moh` into `pbx-moh` before the
-app starts (a no-op once it has audio). On a plain `docker run`, the app restores from the stock path
-when it can still see it, and otherwise logs the one-off copy to run:
+app starts (a no-op once it has audio). On a plain `docker run`, the app keeps classes on the media
+volume, logs the one-off copy to run, and any class still empty gets a generated bed:
 
 ```
 docker run --rm --user root -v <data-volume>:/from:ro -v <moh-volume>:/to asterisk-console \

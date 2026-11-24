@@ -335,7 +335,7 @@ export function generateConfigs() {
     // also mounted at the stock Asterisk path, point the class there so a real
     // Asterisk reads the files it has. A custom directory is used verbatim.
     const published = publishMohPath(m.path);
-    const directory = published || (isManagedMohPath(m.path) ? m.path : m.path || '/var/lib/asterisk/moh');
+    const directory = published || m.path || MOH_PUBLISH_DIR;
     if (!published && isManagedMohPath(m.path) && !publishWarning) {
       publishWarning = true;
       warnings.push(`Music on hold is not published: ${MOH_PUBLISH_DIR} does not hold this class's audio, so pointing Asterisk there would play silence. Classes use the console store path instead; mount the media/moh volume at ${MOH_PUBLISH_DIR} to publish them.`);
