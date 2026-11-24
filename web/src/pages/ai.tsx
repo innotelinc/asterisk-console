@@ -256,7 +256,7 @@ function RecordingModal({ onClose, onDone }: { onClose: () => void; onDone: () =
   );
 }
 
-/* ----------------------------------------------------------------- jingle */
+/* ---------------------------------------------------------------- Jingle */
 
 export function AiJingleButton({ onDone }: { onDone: () => Promise<void> | void }) {
   const [open, setOpen] = useState(false);
@@ -264,7 +264,7 @@ export function AiJingleButton({ onDone }: { onDone: () => Promise<void> | void 
     <>
       <button className="btn" onClick={() => setOpen(true)}>
         <Icon name="Music4" size={15} />
-        Generate jingle
+        Generate Jingle
       </button>
       {open && <JingleModal onClose={() => setOpen(false)} onDone={onDone} />}
     </>
@@ -298,7 +298,7 @@ function JingleModal({ onClose, onDone }: { onClose: () => void; onDone: () => P
 
   return (
     <Modal
-      title={result ? 'Jingle generated' : 'Generate a music-on-hold jingle'}
+      title={result ? 'Jingle generated' : 'Generate a music-on-hold Jingle'}
       subtitle="An AI-written tagline, voiced by text-to-speech over a synthesized music bed."
       onClose={onClose}
       wide
@@ -310,7 +310,7 @@ function JingleModal({ onClose, onDone }: { onClose: () => void; onDone: () => P
             <button className="btn" onClick={onClose}>Cancel</button>
             <button className="btn primary" onClick={generate} disabled={busy || !prompt.trim()}>
               {busy ? <span className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} /> : <Icon name="Music4" size={15} />}
-              Generate jingle
+              Generate Jingle
             </button>
           </>
         )
@@ -349,7 +349,7 @@ function JingleModal({ onClose, onDone }: { onClose: () => void; onDone: () => P
             <div className="field">
               <label>Music class name</label>
               <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="acme-hold" />
-              <span className="hint">Creates or updates this music-on-hold class.</span>
+              <span className="hint">Creates or updates this music-on-hold class. Generating again replaces the class's audio.</span>
             </div>
             <VoiceField voices={voices} value={voice} onChange={setVoice} />
           </div>

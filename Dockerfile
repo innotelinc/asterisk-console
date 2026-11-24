@@ -19,6 +19,10 @@ ENV NODE_ENV=production \
     DATA_DIR=/data \
     SEED_DEMO=1
 
+# ffmpeg converts uploaded hold music from any format to the 8 kHz mono WAV
+# Asterisk plays. The runtime user only needs to execute it.
+RUN apk add --no-cache ffmpeg
+
 COPY package.json ./
 RUN npm install --omit=dev --no-audit --no-fund && npm cache clean --force
 

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, saveBlob, type Entity, type Meta, type Session } from '../lib/api';
 import {
   Badge, Confirm, CopyButton, DataTable, EmptyState, FieldControl, Icon, Modal,
@@ -117,7 +117,7 @@ export default function EntityPage({ name, meta, session }: { name: string; meta
     {
       key: '__actions',
       label: '',
-      width: playable ? 122 : 92,
+      width: name === 'music' && canWrite ? 156 : playable ? 122 : 92,
       render: (row: any) => (
         <div className="actions" onClick={(e) => e.stopPropagation()}>
           {playable && (
@@ -125,6 +125,7 @@ export default function EntityPage({ name, meta, session }: { name: string; meta
               <Icon name="Play" size={14} />
             </button>
           )}
+          {name === 'music' && canWrite && <UploadAudioButton row={row} onDone={load} />}
           {canWrite && (
             <>
               <button className="icon-btn" title="Edit" onClick={() => setEditing(row)} aria-label={`Edit ${row.id}`}>
@@ -508,5 +509,53 @@ function ImportModal({
         )}
       </div>
     </Modal>
+  );
+}
+
+/**
+ * Upload a class's hold music. The server converts anything ffmpeg can read to
+ * 8 kHz mono WAV and replaces the class's own audio, leaving hand-added files.
+ */
+function UploadAudioButton({ row, onDone }: { row: any; onDone: () => Promise<void> | void }) {
+  const input = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const { push } = useToast();
+
+  const upload = async (file: File) => {
+    setBusy(true);
+    try {
+      const result = await api.uploadMusicAudio(row.id, file);
+      push(result.converted ? `Uploaded and converted from ${result.source} to 8 kHz mono WAV` : 'Uploaded audio');
+      await onDone();
+    } catch (err: any) {
+      push(err.message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <button
+        className="icon-btn"
+        title={busy ? 'Uploading…' : 'Upload audio (MP3, WAV, M4A, OGG, FLAC…)'}
+        onClick={() => input.current?.click()}
+        disabled={busy}
+        aria-label={`Upload audio for ${row.id}`}
+      >
+        <Icon name={busy ? 'Loader2' : 'Upload'} size={14} />
+      </button>
+      <input
+        ref={input}
+        type="file"
+        accept="audio/*,.wav,.mp3,.ogg,.oga,.opus,.m4a,.aac,.flac,.wma,.aiff,.au,.amr"
+        hidden
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = '';
+          if (file) upload(file);
+        }}
+      />
+    </>
   );
 }

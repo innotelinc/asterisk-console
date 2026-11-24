@@ -85,11 +85,20 @@ routes through one OpenAI-compatible gateway (set `OMNIROUTE_BASE_URL`, default
   (`AI_TTS_MODEL`, default `google/gemini-2.5-flash-preview-tts`), stored on the `/data` volume and
   added as a recording. **Record voice input** captures the microphone in the browser, converts it
   to WAV locally and transcribes it (`AI_STT_MODEL`) so you can dictate the script instead of typing.
-- **Music on Hold → Generate jingle**: the model writes a one-line tagline from your brief, voices
-  it, and mixes it over a synthesized music bed, then creates or updates the music class.
+- **Music on Hold → Generate Jingle**: the model writes a one-line tagline from your brief, voices
+  it, and mixes it over a synthesized music bed, then creates or updates the music class. Generating
+  again **replaces** that class's audio instead of stacking a second Jingle in front of the first.
 
 Generated files live in `/data/media/moh/<class>` (hold music) and `/data/media/recordings`, and are
 served to signed-in users at `/api/media/…` with a **Preview** action on each record.
+
+You can also upload your own audio for a class (**Upload** on a Music on Hold row). Anything ffmpeg can
+read — MP3, M4A/AAC, OGG/Opus, FLAC, 44.1 kHz stereo WAV — is converted to `8 kHz mono 16-bit PCM WAV`
+first, so Asterisk always plays it, and a file that is already in that shape is stored untouched. The
+Docker image ships ffmpeg; a local `npm start` needs `ffmpeg` on `PATH` (or `FFMPEG_PATH`) only when a
+file actually needs converting. Uploading replaces the class's own audio by default, and deleting a
+class removes only the files the console wrote — audio an operator added by hand, or another class's
+files in a shared directory, is never deleted.
 
 `docker-compose.yml` mounts the `pbx-moh` volume at both `/data/media/moh` and the stock Asterisk
 hold-music path `/var/lib/asterisk/moh`, and `musiconhold.conf` names the stock path, so generated
@@ -190,6 +199,7 @@ PUT    /api/entities/:entity/:id       update
 DELETE /api/entities/:entity/:id       delete
 GET    /api/entities/:entity/export.csv
 POST   /api/entities/:entity/import    text/csv body
+POST   /api/entities/music/:id/audio   raw audio body; converted to 8 kHz mono WAV (?append=1 to stack)
 GET    /api/config[?write=1]           generated Asterisk files
 POST   /api/tools/dialplan-test        {"number":"6000","callerId":"1001"}
 GET    /api/dashboard | /api/cdr | /api/audit | /api/settings | /api/events (SSE)

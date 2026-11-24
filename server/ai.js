@@ -12,7 +12,7 @@
  * provider. The bed is generated locally, so the result is still new audio
  * derived from the operator's text.
  */
-import { copyFileSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, renameSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 
 const DATA_DIR = process.env.DATA_DIR || '/data';
@@ -324,6 +324,60 @@ export function jingleDir(className) {
 }
 
 /**
+ * Names the console gives its own files: `<class>-<base36 stamp>.wav`. Nothing
+ * an operator drops into a directory by hand matches this, so ownership is
+ * decided by the file name instead of by the directory it sits in.
+ */
+function consoleAudioPattern(className) {
+  const slug = slugify(className).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^${slug}-[a-z0-9]+\\.wav$`, 'i');
+}
+
+/** WAVs in `directory` that the console itself wrote for `className`. */
+export function consoleAudioFiles(directory, className) {
+  const dir = String(directory || '');
+  if (!className || !inside(MOH_ROOT, dir) || !existsSync(dir)) return [];
+  const pattern = consoleAudioPattern(className);
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && pattern.test(entry.name))
+      .map((entry) => join(dir, entry.name));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Remove the audio the console wrote for this class, and nothing else: files an
+ * operator added by hand, or another class's audio in a shared directory, stay
+ * where they are. Returns how many files were removed.
+ */
+export function clearClassAudio(directory, className) {
+  let removed = 0;
+  for (const file of consoleAudioFiles(directory, className)) {
+    try {
+      rmSync(file, { force: true });
+      removed += 1;
+    } catch {
+      // Leave a file we cannot delete rather than failing the whole operation.
+    }
+  }
+  return removed;
+}
+
+/** Write WAV bytes into a class directory, named as a console-owned file. */
+export function saveClassAudio(directory, className, wav) {
+  const dir = String(directory || '');
+  if (!inside(MOH_ROOT, dir)) {
+    throw Object.assign(new Error('The class directory is outside the music store'), { status: 400 });
+  }
+  mkdirSync(dir, { recursive: true });
+  const file = `${slugify(className)}-${Date.now().toString(36)}.wav`;
+  writeFileSync(join(dir, file), wav);
+  return file;
+}
+
+/**
  * True when a stored path is just the stock Asterisk default (or the pre-fix
  * per-class path the generator used to write), i.e. a value nobody chose. A
  * deliberately set custom directory is not default.
@@ -437,39 +491,45 @@ export function classAudioFile(directory) {
 }
 
 /**
- * Delete a music class's generated audio, never anything outside the media volume.
+ * Delete a music class's audio, never anything outside the media volume and
+ * never a file the console did not write.
  *
- * Classes generated before jingles got their own directory point at the
- * Asterisk path (/var/lib/asterisk/moh/<class>) while their WAV sits flat in
- * the shared moh folder, so those are matched by the class's generated name.
+ * Two classes may point at one directory, and an operator may keep their own
+ * WAV beside ours, so this removes only `<class>-<stamp>.wav` files. A
+ * directory is dropped only when nothing at all is left in it. Classes
+ * generated before jingles got their own directory point at the Asterisk path
+ * (/var/lib/asterisk/moh/<class>) while their WAV sits flat in the shared moh
+ * folder, so those are matched by the class's generated name.
  */
 export function removeJingleAudio(directory, className) {
-  const mohRoot = MOH_ROOT;
+  if (!className) return false;
   let removed = false;
 
-  if (directory && inside(mohRoot, directory)) {
-    rmSync(directory, { recursive: true, force: true });
-    removed = true;
-  }
-  if (!className) return removed;
-
-  // Stale per-class directory left by an older path value.
+  const dirs = new Set();
+  if (inside(MOH_ROOT, String(directory || ''))) dirs.add(String(directory));
   const classDir = jingleDir(className);
-  const pointsAtClassDir = Boolean(directory) && resolve(directory) === resolve(classDir);
-  if (!pointsAtClassDir && inside(mohRoot, classDir) && existsSync(classDir)) {
-    rmSync(classDir, { recursive: true, force: true });
-    removed = true;
+  if (inside(MOH_ROOT, classDir)) dirs.add(classDir);
+  for (const dir of dirs) {
+    if (clearClassAudio(dir, className) > 0) removed = true;
+    try {
+      if (existsSync(dir) && readdirSync(dir).length === 0) {
+        rmdirSync(dir);
+        removed = true;
+      }
+    } catch {
+      // Shared or non-empty: leave the directory alone.
+    }
   }
 
   // Flat `<slug>-<timestamp>.wav` files: the remainder must be a bare base36
   // stamp, so class "acme" never matches another class's "acme-hold-…" file.
   const prefix = `${slugify(className)}-`;
-  if (existsSync(mohRoot)) {
-    for (const entry of readdirSync(mohRoot, { withFileTypes: true })) {
+  if (existsSync(MOH_ROOT)) {
+    for (const entry of readdirSync(MOH_ROOT, { withFileTypes: true })) {
       if (!entry.isFile() || !entry.name.startsWith(prefix)) continue;
       const stamp = entry.name.slice(prefix.length).replace(/\.wav$/i, '');
       if (!/^[a-z0-9]+$/i.test(stamp)) continue;
-      rmSync(join(mohRoot, entry.name), { force: true });
+      rmSync(join(MOH_ROOT, entry.name), { force: true });
       removed = true;
     }
   }

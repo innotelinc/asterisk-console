@@ -7,7 +7,7 @@
 import express from 'express';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -26,9 +26,11 @@ import {
 } from './asterisk.js';
 import {
   aiInfo, aiConfigured, buildRecording, buildJingle, transcribe, saveMedia, mediaPath, slugify,
-  jingleDir, migrateJingleAudio, removeJingleAudio, removeRecordingFile,
-  ensureMusicAudio, recordingAudioPath, classAudioFile, hasReadableAudio, isManagedMohPath
+  jingleDir, migrateJingleAudio, removeJingleAudio, removeRecordingFile, clearClassAudio,
+  saveClassAudio, ensureMusicAudio, recordingAudioPath, classAudioFile, hasReadableAudio,
+  isManagedMohPath
 } from './ai.js';
+import { MAX_AUDIO_BYTES, toAsteriskWav } from './audio.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8080);
@@ -609,8 +611,11 @@ app.post('/api/ai/jingle', requireRole('operator'), async (req, res, next) => {
     const className = slugify(req.body?.name || 'jingle');
     const { wav, tagline, seconds } = await buildJingle({ prompt: brief, voice: req.body?.voice });
     // The class points at this exact directory, so the WAV has to live in it.
+    // Generating again replaces the class's own audio instead of stacking a
+    // second jingle in front of the first; hand-added files are left alone.
     const directory = jingleDir(className);
-    const file = saveMedia('moh', req.body?.name || 'jingle', wav, className);
+    clearClassAudio(directory, className);
+    const file = saveClassAudio(directory, className, wav);
     const db = getDb();
     let row = db.prepare('SELECT * FROM music WHERE name = ?').get(className);
     if (row) {
@@ -630,6 +635,45 @@ app.post('/api/ai/jingle', requireRole('operator'), async (req, res, next) => {
     });
   } catch (err) { next(err); }
 });
+
+// Upload hold music: the request body is the file itself. Anything that is not
+// already 8 kHz mono PCM WAV is converted, so a class never points at audio the
+// PBX cannot play.
+app.post('/api/entities/music/:id/audio', requireRole('operator'),
+  express.raw({ type: ['audio/*', 'application/octet-stream', 'video/*', 'application/ogg'], limit: MAX_AUDIO_BYTES }),
+  async (req, res, next) => {
+    try {
+      const db = getDb();
+      const row = db.prepare('SELECT * FROM music WHERE id = ?').get(Number(req.params.id));
+      if (!row) return res.status(404).json({ error: 'Music class not found' });
+      const { wav, converted, source } = await toAsteriskWav(req.body);
+      // Uploads land in the console's own store; a custom directory belongs to
+      // the operator and is never written into.
+      const stored = String(row.path || '');
+      const directory = isManagedMohPath(stored) ? stored : jingleDir(row.name);
+      // An upload means "this is the music for this class", so it replaces the
+      // console's own audio by default; ?append=1 keeps the existing tracks.
+      const replace = String(req.query.append || '') !== '1';
+      if (replace) clearClassAudio(directory, row.name);
+      const file = saveClassAudio(directory, row.name, wav);
+      if (directory !== row.path || row.mode !== 'files') {
+        db.prepare("UPDATE music SET path = ?, mode = 'files', updated_at = datetime('now') WHERE id = ?").run(directory, row.id);
+      }
+      audit({
+        actor: req.session.username, action: 'upload_audio', entity: 'music', entityId: row.id,
+        detail: { file, bytes: wav.length, converted, source, replace, upload: req.get('x-filename') || null },
+        ip: req.ip
+      });
+      res.status(201).json({
+        row: redact('music', db.prepare('SELECT * FROM music WHERE id = ?').get(row.id), req.session),
+        file: `/api/media/moh/${basename(directory)}/${file}`,
+        directory, bytes: wav.length, converted, source, replace
+      });
+    } catch (err) {
+      if (err.status) return res.status(err.status).json({ error: err.message });
+      next(err);
+    }
+  });
 
 // Preview for a record's audio: recordings play their stored WAV, a music class
 // plays the first file in its directory.
