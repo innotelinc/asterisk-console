@@ -26,7 +26,7 @@ import {
 } from './asterisk.js';
 import {
   aiInfo, aiConfigured, buildRecording, buildJingle, transcribe, saveMedia, mediaPath, slugify,
-  jingleDir, removeJingleDir, removeRecordingFile
+  jingleDir, removeJingleAudio, removeRecordingFile
 } from './ai.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -425,7 +425,7 @@ app.delete('/api/entities/:entity/:id', requireRole('operator'), (req, res) => {
   const doomed = db.prepare(`SELECT * FROM ${name} WHERE id = ?`).get(id);
   db.prepare(`DELETE FROM ${name} WHERE id = ?`).run(id);
   if (name === 'recordings' && doomed) removeRecordingFile(doomed.filename);
-  if (name === 'music' && doomed) removeJingleDir(doomed.path);
+  if (name === 'music' && doomed) removeJingleAudio(doomed.path, doomed.name);
   audit({ actor: req.session.username, action: 'delete', entity: name, entityId: id, ip: req.ip });
   res.json({ ok: true });
 });

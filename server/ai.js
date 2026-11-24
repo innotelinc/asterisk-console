@@ -12,7 +12,7 @@
  * provider. The bed is generated locally, so the result is still new audio
  * derived from the operator's text.
  */
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 
 const DATA_DIR = process.env.DATA_DIR || '/data';
@@ -325,12 +325,44 @@ export function saveMedia(kind, name, wav, subdir) {
   return file;
 }
 
-/** Delete a music class's generated jingle files, never anything outside the media volume. */
-export function removeJingleDir(directory) {
-  if (!directory) return false;
-  if (!inside(join(MEDIA_DIR, 'moh'), directory)) return false;
-  rmSync(directory, { recursive: true, force: true });
-  return true;
+/**
+ * Delete a music class's generated audio, never anything outside the media volume.
+ *
+ * Classes generated before jingles got their own directory point at the
+ * Asterisk path (/var/lib/asterisk/moh/<class>) while their WAV sits flat in
+ * the shared moh folder, so those are matched by the class's generated name.
+ */
+export function removeJingleAudio(directory, className) {
+  const mohRoot = join(MEDIA_DIR, 'moh');
+  let removed = false;
+
+  if (directory && inside(mohRoot, directory)) {
+    rmSync(directory, { recursive: true, force: true });
+    removed = true;
+  }
+  if (!className) return removed;
+
+  // Stale per-class directory left by an older path value.
+  const classDir = jingleDir(className);
+  const pointsAtClassDir = Boolean(directory) && resolve(directory) === resolve(classDir);
+  if (!pointsAtClassDir && inside(mohRoot, classDir) && existsSync(classDir)) {
+    rmSync(classDir, { recursive: true, force: true });
+    removed = true;
+  }
+
+  // Flat `<slug>-<timestamp>.wav` files: the remainder must be a bare base36
+  // stamp, so class "acme" never matches another class's "acme-hold-…" file.
+  const prefix = `${slugify(className)}-`;
+  if (existsSync(mohRoot)) {
+    for (const entry of readdirSync(mohRoot, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.startsWith(prefix)) continue;
+      const stamp = entry.name.slice(prefix.length).replace(/\.wav$/i, '');
+      if (!/^[a-z0-9]+$/i.test(stamp)) continue;
+      rmSync(join(mohRoot, entry.name), { force: true });
+      removed = true;
+    }
+  }
+  return removed;
 }
 
 /** Delete the stored WAV behind a recording row (`filename` is relative to the sounds dir). */
