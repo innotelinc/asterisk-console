@@ -96,7 +96,9 @@ You can also upload your own audio for a class (**Upload** on a Music on Hold ro
 read — MP3, M4A/AAC, OGG/Opus, FLAC, 44.1 kHz stereo WAV — is converted to `8 kHz mono 16-bit PCM WAV`
 first, so Asterisk always plays it, and a file that is already in that shape is stored untouched. The
 Docker image ships ffmpeg; a local `npm start` needs `ffmpeg` on `PATH` (or `FFMPEG_PATH`) only when a
-file actually needs converting. Uploading replaces the class's own audio by default, and deleting a
+file actually needs converting. A conversion that runs past 30 seconds or 64 MB of output is killed,
+so a malformed or very long file fails the request instead of holding it open. Uploading replaces the
+class's own audio by default (the new file is written before the old one is removed), and deleting a
 class removes only the files the console wrote — audio an operator added by hand, or another class's
 files in a shared directory, is never deleted.
 

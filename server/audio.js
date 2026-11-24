@@ -19,6 +19,9 @@ const ASTERISK_RATE = 8000;
 
 const fail = (status, message) => Object.assign(new Error(message), { status });
 
+/** Bytes as whole megabytes, for error messages. */
+const mb = (bytes) => Math.round(bytes / 1024 / 1024);
+
 /** Read the fmt chunk of a RIFF/WAVE buffer, or null when it is not one. */
 function wavFormat(buffer) {
   if (!Buffer.isBuffer(buffer) || buffer.length < 44) return null;
@@ -47,21 +50,37 @@ const playable = (fmt) => Boolean(fmt && fmt.format === 1 && fmt.channels === 1 
 
 const describe = (fmt) => `${fmt.rate} Hz ${fmt.channels === 1 ? 'mono' : `${fmt.channels} ch`} ${fmt.bits}-bit${fmt.format === 1 ? ' PCM' : ''}`;
 
-/** Run ffmpeg over stdin/stdout, forcing 8 kHz mono 16-bit PCM WAV. */
+/** Longest a single conversion may run before ffmpeg is killed. */
+const CONVERT_TIMEOUT_MS = 30_000;
+
+/** Largest WAV one conversion may produce, so a long upload cannot exhaust memory. */
+const MAX_WAV_BYTES = 64 * 1024 * 1024;
+
+/**
+ * Run ffmpeg over stdin/stdout, forcing 8 kHz mono 16-bit PCM WAV. A malformed
+ * upload must not hold the request open, so the child is killed once the
+ * timeout expires or its output passes the size cap.
+ */
 function convert(input) {
   return new Promise((resolve, reject) => {
     let settled = false;
+    let timer;
+    let child;
+    const chunks = [];
+    let size = 0;
+    let stderr = '';
     const finish = (error, value) => {
       if (settled) return;
       settled = true;
-      if (error) reject(error);
-      else resolve(value);
+      clearTimeout(timer);
+      if (!error) return resolve(value);
+      child?.kill('SIGKILL');
+      reject(error);
     };
-    let child;
     try {
       child = spawn(
         FFMPEG,
-        ['-hide_banner', '-loglevel', 'error', '-i', 'pipe:0', '-vn', '-ac', '1',
+        ['-nostdin', '-hide_banner', '-loglevel', 'error', '-i', 'pipe:0', '-vn', '-ac', '1',
           '-ar', String(ASTERISK_RATE), '-acodec', 'pcm_s16le', '-f', 'wav', 'pipe:1'],
         { stdio: ['pipe', 'pipe', 'pipe'] }
       );
@@ -69,12 +88,21 @@ function convert(input) {
       finish(fail(500, `Audio converter failed to start: ${err.message}`));
       return;
     }
-    const chunks = [];
-    let stderr = '';
+    timer = setTimeout(
+      () => finish(fail(504, 'The audio converter took too long; try a shorter or simpler file')),
+      CONVERT_TIMEOUT_MS
+    );
     child.on('error', (err) => finish(err.code === 'ENOENT'
       ? fail(503, 'This server has no audio converter (ffmpeg); upload an 8 kHz mono WAV instead')
       : fail(500, `Audio converter failed: ${err.message}`)));
-    child.stdout.on('data', (chunk) => chunks.push(chunk));
+    child.stdout.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > MAX_WAV_BYTES) {
+        finish(fail(413, `That file is too long: converted audio must be smaller than ${mb(MAX_WAV_BYTES)} MB`));
+        return;
+      }
+      chunks.push(chunk);
+    });
     child.stderr.on('data', (chunk) => {
       if (stderr.length < 4000) stderr += chunk.toString();
     });
@@ -95,7 +123,7 @@ function convert(input) {
 export async function toAsteriskWav(buffer) {
   if (!Buffer.isBuffer(buffer) || !buffer.length) throw fail(400, 'Send the audio file as the request body');
   if (buffer.length > MAX_AUDIO_BYTES) {
-    throw fail(413, `Audio must be smaller than ${Math.round(MAX_AUDIO_BYTES / 1024 / 1024)} MB`);
+    throw fail(413, `Audio must be smaller than ${mb(MAX_AUDIO_BYTES)} MB`);
   }
   const fmt = wavFormat(buffer);
   if (playable(fmt)) return { wav: buffer, converted: false, source: describe(fmt) };

@@ -356,11 +356,13 @@ export function consoleAudioFiles(directory, className) {
 /**
  * Remove the audio the console wrote for this class, and nothing else: files an
  * operator added by hand, or another class's audio in a shared directory, stay
- * where they are. Returns how many files were removed.
+ * where they are. `keep` names one file to spare. Returns how many files were
+ * removed.
  */
-export function clearClassAudio(directory, className) {
+export function clearClassAudio(directory, className, keep = null) {
   let removed = 0;
   for (const file of consoleAudioFiles(directory, className)) {
+    if (keep && basename(file) === keep) continue;
     try {
       rmSync(file, { force: true });
       removed += 1;
@@ -380,6 +382,18 @@ export function saveClassAudio(directory, className, wav) {
   mkdirSync(dir, { recursive: true });
   const file = `${slugify(className)}-${Date.now().toString(36)}.wav`;
   writeFileSync(join(dir, file), wav);
+  return file;
+}
+
+/**
+ * Replace a class's console-owned audio: the new file is written first and the
+ * older ones are only removed once it is on disk, so a failed write leaves the
+ * current music playing instead of leaving the class silent. Returns the new
+ * file name.
+ */
+export function replaceClassAudio(directory, className, wav) {
+  const file = saveClassAudio(directory, className, wav);
+  clearClassAudio(directory, className, file);
   return file;
 }
 

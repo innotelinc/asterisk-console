@@ -26,7 +26,7 @@ import {
 } from './asterisk.js';
 import {
   aiInfo, aiConfigured, buildRecording, buildJingle, transcribe, saveMedia, mediaPath, slugify,
-  jingleDir, migrateJingleAudio, removeJingleAudio, removeRecordingFile, clearClassAudio,
+  jingleDir, migrateJingleAudio, removeJingleAudio, removeRecordingFile, replaceClassAudio,
   saveClassAudio, ensureMusicAudio, recordingAudioPath, classAudioFile, hasReadableAudio,
   isManagedMohPath
 } from './ai.js';
@@ -614,8 +614,7 @@ app.post('/api/ai/jingle', requireRole('operator'), async (req, res, next) => {
     // Generating again replaces the class's own audio instead of stacking a
     // second jingle in front of the first; hand-added files are left alone.
     const directory = jingleDir(className);
-    clearClassAudio(directory, className);
-    const file = saveClassAudio(directory, className, wav);
+    const file = replaceClassAudio(directory, className, wav);
     const db = getDb();
     let row = db.prepare('SELECT * FROM music WHERE name = ?').get(className);
     if (row) {
@@ -653,9 +652,12 @@ app.post('/api/entities/music/:id/audio', requireRole('operator'),
       const directory = isManagedMohPath(stored) ? stored : jingleDir(row.name);
       // An upload means "this is the music for this class", so it replaces the
       // console's own audio by default; ?append=1 keeps the existing tracks.
+      // Replacing writes the new file before removing the old ones, so the
+      // class always has audio to play.
       const replace = String(req.query.append || '') !== '1';
-      if (replace) clearClassAudio(directory, row.name);
-      const file = saveClassAudio(directory, row.name, wav);
+      const file = replace
+        ? replaceClassAudio(directory, row.name, wav)
+        : saveClassAudio(directory, row.name, wav);
       if (directory !== row.path || row.mode !== 'files') {
         db.prepare("UPDATE music SET path = ?, mode = 'files', updated_at = datetime('now') WHERE id = ?").run(directory, row.id);
       }
