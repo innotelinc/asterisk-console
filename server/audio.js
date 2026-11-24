@@ -15,12 +15,12 @@ const FFMPEG = process.env.FFMPEG_PATH || 'ffmpeg';
 export const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 
 /** The sample rate Asterisk uses natively. */
-export const ASTERISK_RATE = 8000;
+const ASTERISK_RATE = 8000;
 
 const fail = (status, message) => Object.assign(new Error(message), { status });
 
 /** Read the fmt chunk of a RIFF/WAVE buffer, or null when it is not one. */
-export function wavFormat(buffer) {
+function wavFormat(buffer) {
   if (!Buffer.isBuffer(buffer) || buffer.length < 44) return null;
   if (buffer.toString('ascii', 0, 4) !== 'RIFF' || buffer.toString('ascii', 8, 12) !== 'WAVE') return null;
   let offset = 12;
@@ -44,9 +44,6 @@ export function wavFormat(buffer) {
 }
 
 const playable = (fmt) => Boolean(fmt && fmt.format === 1 && fmt.channels === 1 && fmt.rate === ASTERISK_RATE && fmt.bits === 16);
-
-/** True when the buffer is already 8 kHz mono 16-bit PCM WAV. */
-export const isAsteriskWav = (buffer) => playable(wavFormat(buffer));
 
 const describe = (fmt) => `${fmt.rate} Hz ${fmt.channels === 1 ? 'mono' : `${fmt.channels} ch`} ${fmt.bits}-bit${fmt.format === 1 ? ' PCM' : ''}`;
 

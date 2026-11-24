@@ -13,7 +13,7 @@
  * derived from the operator's text.
  */
 import { copyFileSync, existsSync, mkdirSync, readdirSync, renameSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
-import { join, relative, resolve, sep } from 'node:path';
+import { basename, join, relative, resolve, sep } from 'node:path';
 
 const DATA_DIR = process.env.DATA_DIR || '/data';
 export const MEDIA_DIR = join(DATA_DIR, 'media');
@@ -311,12 +311,15 @@ export const slugify = (value) => String(value || 'audio')
 const MEDIA_KINDS = new Set(['recordings', 'moh']);
 const SAFE_SEGMENT = /^[a-z0-9][a-z0-9._-]*$/i;
 
-/** True when `target` resolves inside `root`. */
-function inside(root, target) {
+/** True when `target` resolves to `root` itself or somewhere inside it. */
+function within(root, target) {
   const base = resolve(root);
   const path = resolve(target);
-  return path !== base && path.startsWith(base + sep);
+  return path === base || path.startsWith(base + sep);
 }
+
+/** True when `target` resolves inside `root`, never `root` itself. */
+const inside = (root, target) => within(root, target) && resolve(target) !== resolve(root);
 
 /** Directory holding a music class's generated jingle. */
 export function jingleDir(className) {
@@ -329,14 +332,17 @@ export function jingleDir(className) {
  * decided by the file name instead of by the directory it sits in.
  */
 function consoleAudioPattern(className) {
-  const slug = slugify(className).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`^${slug}-[a-z0-9]+\\.wav$`, 'i');
+  // slugify only emits [a-z0-9-], so the class name needs no regex escaping.
+  return new RegExp(`^${slugify(className)}-[a-z0-9]+\\.wav$`, 'i');
 }
 
-/** WAVs in `directory` that the console itself wrote for `className`. */
+/**
+ * WAVs in `directory` that the console itself wrote for `className`. The store
+ * root is scanned too, because pre-fix classes left audio flat in it.
+ */
 export function consoleAudioFiles(directory, className) {
   const dir = String(directory || '');
-  if (!className || !inside(MOH_ROOT, dir) || !existsSync(dir)) return [];
+  if (!className || !within(MOH_ROOT, dir) || !existsSync(dir)) return [];
   const pattern = consoleAudioPattern(className);
   try {
     return readdirSync(dir, { withFileTypes: true })
@@ -418,12 +424,8 @@ export function mediaPath(kind, file) {
 }
 
 /** Persist generated audio and return its file name. */
-export function saveMedia(kind, name, wav, subdir) {
-  if (subdir !== undefined && !SAFE_SEGMENT.test(String(subdir))) {
-    throw Object.assign(new Error('Invalid media directory'), { status: 400 });
-  }
-  const root = kind === 'moh' ? MOH_ROOT : join(MEDIA_DIR, kind);
-  const dir = subdir ? join(root, String(subdir)) : root;
+export function saveMedia(kind, name, wav) {
+  const dir = join(MEDIA_DIR, kind);
   mkdirSync(dir, { recursive: true });
   const file = `${slugify(name)}-${Date.now().toString(36)}.wav`;
   writeFileSync(join(dir, file), wav);
@@ -468,8 +470,7 @@ export function ensureMusicAudio(directory, className, seconds = 24) {
 }
 
 function writeHoldMusic(dir, className, seconds) {
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, `${slugify(className)}-${Date.now().toString(36)}.wav`), buildHoldMusic(className, seconds));
+  saveClassAudio(dir, className, buildHoldMusic(className, seconds));
 }
 
 /** Absolute WAV path for a recording row, or null when it is not on the volume. */
@@ -503,37 +504,23 @@ export function classAudioFile(directory) {
  */
 export function removeJingleAudio(directory, className) {
   if (!className) return false;
-  let removed = false;
+  // The store root holds flat audio from pre-fix classes; the class's own
+  // directory may be shared with another class or with operator audio.
+  const dirs = new Set([MOH_ROOT, jingleDir(className)]);
+  const stored = String(directory || '');
+  if (within(MOH_ROOT, stored)) dirs.add(stored);
 
-  const dirs = new Set();
-  if (inside(MOH_ROOT, String(directory || ''))) dirs.add(String(directory));
-  const classDir = jingleDir(className);
-  if (inside(MOH_ROOT, classDir)) dirs.add(classDir);
+  let removed = 0;
   for (const dir of dirs) {
-    if (clearClassAudio(dir, className) > 0) removed = true;
+    removed += clearClassAudio(dir, className);
+    if (dir === MOH_ROOT) continue;
     try {
-      if (existsSync(dir) && readdirSync(dir).length === 0) {
-        rmdirSync(dir);
-        removed = true;
-      }
+      if (existsSync(dir) && readdirSync(dir).length === 0) rmdirSync(dir);
     } catch {
       // Shared or non-empty: leave the directory alone.
     }
   }
-
-  // Flat `<slug>-<timestamp>.wav` files: the remainder must be a bare base36
-  // stamp, so class "acme" never matches another class's "acme-hold-…" file.
-  const prefix = `${slugify(className)}-`;
-  if (existsSync(MOH_ROOT)) {
-    for (const entry of readdirSync(MOH_ROOT, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.startsWith(prefix)) continue;
-      const stamp = entry.name.slice(prefix.length).replace(/\.wav$/i, '');
-      if (!/^[a-z0-9]+$/i.test(stamp)) continue;
-      rmSync(join(MOH_ROOT, entry.name), { force: true });
-      removed = true;
-    }
-  }
-  return removed;
+  return removed > 0;
 }
 
 /**
@@ -550,25 +537,18 @@ export function migrateJingleAudio(directory, className) {
   if (current !== `${DEFAULT_MOH_DIR}/${slugify(className)}`) return null;
 
   const target = jingleDir(className);
-  const prefix = `${slugify(className)}-`;
   let moved = 0;
-  if (existsSync(MOH_ROOT)) {
-    for (const entry of readdirSync(MOH_ROOT, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.startsWith(prefix)) continue;
-      const stamp = entry.name.slice(prefix.length).replace(/\.wav$/i, '');
-      if (!/^[a-z0-9]+$/i.test(stamp)) continue;
-      mkdirSync(target, { recursive: true });
-      const from = join(MOH_ROOT, entry.name);
-      const to = join(target, entry.name);
-      try {
-        renameSync(from, to);
-      } catch {
-        // Different filesystems (or a mounted volume): copy then remove.
-        copyFileSync(from, to);
-        rmSync(from, { force: true });
-      }
-      moved += 1;
+  for (const from of consoleAudioFiles(MOH_ROOT, className)) {
+    mkdirSync(target, { recursive: true });
+    const to = join(target, basename(from));
+    try {
+      renameSync(from, to);
+    } catch {
+      // Different filesystems (or a mounted volume): copy then remove.
+      copyFileSync(from, to);
+      rmSync(from, { force: true });
     }
+    moved += 1;
   }
   if (!moved && !hasReadableAudio(target)) return null;
   return target;

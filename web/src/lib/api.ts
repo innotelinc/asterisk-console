@@ -107,8 +107,8 @@ export const api = {
   createJingle: (body: { name: string; prompt: string; voice?: string }) =>
     request<{ row: any; file: string; tagline: string; seconds: number; directory: string }>('/api/ai/jingle', { method: 'POST', body }),
   // Upload own hold music; the server converts it to 8 kHz mono WAV.
-  uploadMusicAudio: async (id: number, file: File, append = false) => {
-    const res = await fetch(`/api/entities/music/${id}/audio${append ? '?append=1' : ''}`, {
+  uploadMusicAudio: async (id: number, file: File) => {
+    const res = await fetch(`/api/entities/music/${id}/audio`, {
       method: 'POST',
       headers: {
         'x-csrf': cookie('ac_csrf'),
