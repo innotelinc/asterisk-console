@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { api } from '../lib/api';
+import { api, type MohReload } from '../lib/api';
 import { Icon, Modal, useToast } from '../lib/ui';
 
 /* --------------------------------------------------------- audio capture */
@@ -278,7 +278,7 @@ function JingleModal({ onClose, onDone }: { onClose: () => void; onDone: () => P
   const [voice, setVoice] = useState('Kore');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [result, setResult] = useState<{ file: string; tagline: string; directory: string; seconds: number } | null>(null);
+  const [result, setResult] = useState<{ file: string; tagline: string; directory: string; seconds: number; reload: MohReload } | null>(null);
   const { push } = useToast();
 
   const generate = async () => {
@@ -286,7 +286,7 @@ function JingleModal({ onClose, onDone }: { onClose: () => void; onDone: () => P
     setError('');
     try {
       const res = await api.createJingle({ name: name.trim() || 'jingle', prompt: prompt.trim(), voice });
-      setResult({ file: res.file, tagline: res.tagline, directory: res.directory, seconds: res.seconds });
+      setResult({ file: res.file, tagline: res.tagline, directory: res.directory, seconds: res.seconds, reload: res.reload });
       await onDone();
       push('Jingle generated');
     } catch (err: any) {
@@ -321,6 +321,10 @@ function JingleModal({ onClose, onDone }: { onClose: () => void; onDone: () => P
           <div className="alert ok">
             <Icon name="CircleCheck" size={15} />
             <div>“{result.tagline}”</div>
+          </div>
+          <div className={`alert ${result.reload.reloaded ? 'ok' : 'warn'}`}>
+            <Icon name={result.reload.reloaded ? 'CircleCheck' : 'AlertTriangle'} size={15} />
+            <div>{result.reload.reason}</div>
           </div>
           <div className="field">
             <label>Jingle · {Math.round(result.seconds)}s</label>

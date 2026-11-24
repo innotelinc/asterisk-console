@@ -573,6 +573,33 @@ export function getAmiState() {
   return amiState;
 }
 
+/**
+ * Ask Asterisk to re-read its music-on-hold classes, so a file the console just
+ * wrote plays without waiting for a manual reload. Always resolves with a plain
+ * answer: `reloaded` is true only when the PBX confirmed it, and `reason` says
+ * what happened when it did not.
+ */
+export async function reloadMusicOnHold() {
+  if (!amiConfigured()) {
+    return {
+      reloaded: false,
+      reason: 'AMI is not configured, so Asterisk was not told to reload: the new audio plays after the next music-on-hold reload or restart'
+    };
+  }
+  // Only the `command` write class (or `all`) is needed for a CLI command.
+  // amiAction reports failures as `error` instead of rejecting.
+  const res = await amiAction('Command', { Command: 'module reload res_musiconhold.so' });
+  if (res.error) return { reloaded: false, reason: `Asterisk was not reloaded: ${res.error}` };
+  const text = String(res.raw || '');
+  if (/permission denied/i.test(text)) {
+    return { reloaded: false, reason: 'Asterisk refused the reload: the AMI user needs the "command" write class in manager.conf' };
+  }
+  if (/reloaded/i.test(text)) return { reloaded: true, reason: 'Asterisk reloaded its music-on-hold classes' };
+  const note = text.split('\r\n').map((line) => line.trim())
+    .find((line) => line && !/^(Response|Privilege|ActionID|--END COMMAND--)/i.test(line));
+  return { reloaded: false, reason: note ? `Asterisk was not reloaded: ${note}` : 'Asterisk did not confirm the reload' };
+}
+
 // --------------------------------------------------------------------------
 // Host telemetry
 // --------------------------------------------------------------------------

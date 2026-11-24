@@ -266,8 +266,9 @@ export default function EntityPage({ name, meta, session }: { name: string; meta
           onClose={() => setConfirming(null)}
           onConfirm={async () => {
             try {
-              await api.remove(name, confirming.id);
+              const res = await api.remove(name, confirming.id);
               push(`${entity.label} deleted`);
+              if (res.reload && !res.reload.reloaded) push(res.reload.reason, 'error');
               setConfirming(null);
               await load();
             } catch (err: any) {
@@ -526,6 +527,7 @@ function UploadAudioButton({ row, onDone }: { row: any; onDone: () => Promise<vo
     try {
       const result = await api.uploadMusicAudio(row.id, file);
       push(result.converted ? `Uploaded and converted from ${result.source} to 8 kHz mono WAV` : 'Uploaded audio');
+      if (!result.reload.reloaded) push(result.reload.reason, 'error');
       await onDone();
     } catch (err: any) {
       push(err.message, 'error');

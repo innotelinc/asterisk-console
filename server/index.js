@@ -22,7 +22,7 @@ import {
   recordFailure, clearFailures, tokenFromRequest
 } from './auth.js';
 import {
-  generateConfigs, testDialplan, hostStats, refreshAmi, getAmiState, amiConfigured
+  generateConfigs, testDialplan, hostStats, refreshAmi, getAmiState, amiConfigured, reloadMusicOnHold
 } from './asterisk.js';
 import {
   aiInfo, aiConfigured, buildRecording, buildJingle, transcribe, saveMedia, mediaPath, slugify,
@@ -416,7 +416,7 @@ app.put('/api/entities/:entity/:id', requireRole('operator'), (req, res) => {
   }
 });
 
-app.delete('/api/entities/:entity/:id', requireRole('operator'), (req, res) => {
+app.delete('/api/entities/:entity/:id', requireRole('operator'), async (req, res) => {
   const name = req.params.entity;
   if (name === 'users' && !hasRole(req.session, 'admin')) return res.status(403).json({ error: 'Requires admin privileges' });
   if (!entityOr404(req, res)) return;
@@ -432,14 +432,21 @@ app.delete('/api/entities/:entity/:id', requireRole('operator'), (req, res) => {
       return res.status(400).json({ error: 'At least one enabled administrator is required' });
     }
   }
-  // Read the row first: recordings and music classes own a generated WAV that
-  // has to go with them.
-  const doomed = db.prepare(`SELECT * FROM ${name} WHERE id = ?`).get(id);
-  db.prepare(`DELETE FROM ${name} WHERE id = ?`).run(id);
-  if (name === 'recordings' && doomed) removeRecordingFile(doomed.filename);
-  if (name === 'music' && doomed) removeJingleAudio(doomed.path, doomed.name);
-  audit({ actor: req.session.username, action: 'delete', entity: name, entityId: id, ip: req.ip });
-  res.json({ ok: true });
+  try {
+    // Read the row first: recordings and music classes own a generated WAV that
+    // has to go with them.
+    const doomed = db.prepare(`SELECT * FROM ${name} WHERE id = ?`).get(id);
+    db.prepare(`DELETE FROM ${name} WHERE id = ?`).run(id);
+    if (name === 'recordings' && doomed) removeRecordingFile(doomed.filename);
+    // Asterisk only notices the files are gone once the module re-reads the
+    // directory, so report whether that reload actually happened.
+    const removed = name === 'music' && doomed ? removeJingleAudio(doomed.path, doomed.name) : false;
+    const reload = removed ? await reloadMusicOnHold() : null;
+    audit({ actor: req.session.username, action: 'delete', entity: name, entityId: id, detail: reload ? { reloaded: reload.reloaded } : undefined, ip: req.ip });
+    res.json({ ok: true, ...(reload ? { reload } : {}) });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
 });
 
 // CSV export / import -------------------------------------------------------
@@ -624,13 +631,15 @@ app.post('/api/ai/jingle', requireRole('operator'), async (req, res, next) => {
         .run(className, 'files', directory, 'alpha');
       row = db.prepare('SELECT * FROM music WHERE id = ?').get(Number(info.lastInsertRowid));
     }
-    audit({ actor: req.session.username, action: 'ai_jingle', entity: 'music', entityId: row.id, detail: { className, tagline, seconds, voice: req.body?.voice }, ip: req.ip });
+    const reload = await reloadMusicOnHold();
+    audit({ actor: req.session.username, action: 'ai_jingle', entity: 'music', entityId: row.id, detail: { className, tagline, seconds, voice: req.body?.voice, reloaded: reload.reloaded }, ip: req.ip });
     res.status(201).json({
       row: redact('music', db.prepare('SELECT * FROM music WHERE id = ?').get(row.id), req.session),
       file: `/api/media/moh/${className}/${file}`,
       tagline,
       seconds,
-      directory
+      directory,
+      reload
     });
   } catch (err) { next(err); }
 });
@@ -661,15 +670,16 @@ app.post('/api/entities/music/:id/audio', requireRole('operator'),
       if (directory !== row.path || row.mode !== 'files') {
         db.prepare("UPDATE music SET path = ?, mode = 'files', updated_at = datetime('now') WHERE id = ?").run(directory, row.id);
       }
+      const reload = await reloadMusicOnHold();
       audit({
         actor: req.session.username, action: 'upload_audio', entity: 'music', entityId: row.id,
-        detail: { file, bytes: wav.length, converted, source, replace, upload: req.get('x-filename') || null },
+        detail: { file, bytes: wav.length, converted, source, replace, reloaded: reload.reloaded, upload: req.get('x-filename') || null },
         ip: req.ip
       });
       res.status(201).json({
         row: redact('music', db.prepare('SELECT * FROM music WHERE id = ?').get(row.id), req.session),
         file: `/api/media/moh/${basename(directory)}/${file}`,
-        directory, bytes: wav.length, converted, source, replace
+        directory, bytes: wav.length, converted, source, replace, reload
       });
     } catch (err) {
       if (err.status) return res.status(err.status).json({ error: err.message });

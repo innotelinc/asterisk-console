@@ -1,6 +1,8 @@
 /** Typed-ish fetch wrapper: same-origin cookies + CSRF header on mutations. */
 
 export type Session = { sub: number; username: string; name: string; role: 'admin' | 'operator' | 'readonly' };
+/** Whether Asterisk was told to re-read its music-on-hold classes, and why not. */
+export type MohReload = { reloaded: boolean; reason: string };
 export type Field = {
   key: string; label: string; type: string; required?: boolean; unique?: boolean;
   options?: [string, string][]; help?: string; default?: any; list?: boolean;
@@ -74,7 +76,7 @@ export const api = {
   },
   create: (entity: string, body: any) => request<{ row: any; token?: string }>(`/api/entities/${entity}`, { method: 'POST', body }),
   update: (entity: string, id: number, body: any) => request<{ row: any }>(`/api/entities/${entity}/${id}`, { method: 'PUT', body }),
-  remove: (entity: string, id: number) => request(`/api/entities/${entity}/${id}`, { method: 'DELETE' }),
+  remove: (entity: string, id: number) => request<{ ok: boolean; reload?: MohReload }>(`/api/entities/${entity}/${id}`, { method: 'DELETE' }),
   exportUrl: (entity: string) => `/api/entities/${entity}/export.csv`,
   importCsv: (entity: string, csv: string) => request<{ imported: number; errors: string[] }>(`/api/entities/${entity}/import`, { method: 'POST', body: csv, raw: true }),
   download: async (entity: string) => {
@@ -105,7 +107,7 @@ export const api = {
   createRecording: (body: { name: string; text: string; voice?: string; language?: string }) =>
     request<{ row: any; file: string; text: string }>('/api/ai/recordings', { method: 'POST', body }),
   createJingle: (body: { name: string; prompt: string; voice?: string }) =>
-    request<{ row: any; file: string; tagline: string; seconds: number; directory: string }>('/api/ai/jingle', { method: 'POST', body }),
+    request<{ row: any; file: string; tagline: string; seconds: number; directory: string; reload: MohReload }>('/api/ai/jingle', { method: 'POST', body }),
   // Upload own hold music; the server converts it to 8 kHz mono WAV.
   uploadMusicAudio: async (id: number, file: File) => {
     const res = await fetch(`/api/entities/music/${id}/audio`, {
@@ -120,7 +122,7 @@ export const api = {
     });
     const data = await res.json().catch(() => null);
     if (!res.ok) throw new ApiError((data && data.error) || `Upload failed (${res.status})`, res.status);
-    return data as { file: string; directory: string; bytes: number; converted: boolean; source: string; replace: boolean };
+    return data as { file: string; directory: string; bytes: number; converted: boolean; source: string; replace: boolean; reload: MohReload };
   },
   transcribe: async (blob: Blob) => {
     const res = await fetch('/api/ai/transcribe?format=wav', {

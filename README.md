@@ -102,6 +102,11 @@ class's own audio by default (the new file is written before the old one is remo
 class removes only the files the console wrote — audio an operator added by hand, or another class's
 files in a shared directory, is never deleted.
 
+After a Jingle, upload or delete changes a class's audio, the console reloads `res_musiconhold.so` over
+AMI so Asterisk plays the new files at once (the AMI user needs the `command` write class). The
+response says whether that reload happened, and when AMI is not configured it says plainly that
+Asterisk was not reloaded instead of implying the new audio is already live.
+
 `docker-compose.yml` mounts the `pbx-moh` volume at both `/data/media/moh` and the stock Asterisk
 hold-music path `/var/lib/asterisk/moh`, and `musiconhold.conf` names the stock path, so generated
 hold music plays without a manual copy. With a plain `docker run`, add both mounts:
