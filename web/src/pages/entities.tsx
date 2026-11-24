@@ -17,9 +17,27 @@ export default function EntityPage({ name, meta, session }: { name: string; meta
   const [confirming, setConfirming] = useState<any | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [issuedToken, setIssuedToken] = useState<{ name: string; token: string } | null>(null);
+  const [preview, setPreview] = useState<{ row: any; url: string } | null>(null);
   const [relations, setRelations] = useState<Record<string, { value: any; label: string }[]>>({});
   const { push } = useToast();
   const canWrite = session.role !== 'readonly';
+  const playable = name === 'recordings' || name === 'music';
+
+  // Check the file exists before opening the player, so a record without audio
+  // explains itself instead of showing a dead player.
+  const openPreview = async (row: any) => {
+    const url = `/api/entities/${name}/${row.id}/audio`;
+    try {
+      const res = await fetch(url, { method: 'HEAD', credentials: 'same-origin' });
+      if (!res.ok) {
+        push(res.status === 404 ? 'No audio file on the media volume for this record' : 'Could not load audio', 'error');
+        return;
+      }
+      setPreview({ row, url });
+    } catch {
+      push('Could not load audio', 'error');
+    }
+  };
 
   const load = useCallback(async () => {
     if (!entity) return;
@@ -99,9 +117,14 @@ export default function EntityPage({ name, meta, session }: { name: string; meta
     {
       key: '__actions',
       label: '',
-      width: 92,
+      width: playable ? 122 : 92,
       render: (row: any) => (
         <div className="actions" onClick={(e) => e.stopPropagation()}>
+          {playable && (
+            <button className="icon-btn" title="Preview audio" onClick={() => openPreview(row)} aria-label={`Preview ${row.id}`}>
+              <Icon name="Play" size={14} />
+            </button>
+          )}
           {canWrite && (
             <>
               <button className="icon-btn" title="Edit" onClick={() => setEditing(row)} aria-label={`Edit ${row.id}`}>
@@ -260,6 +283,26 @@ export default function EntityPage({ name, meta, session }: { name: string; meta
           onClose={() => setImportOpen(false)}
           onDone={async () => { setImportOpen(false); await load(); }}
         />
+      )}
+
+      {preview && (
+        <Modal
+          title="Preview audio"
+          subtitle={titleOf(preview.row)}
+          onClose={() => setPreview(null)}
+          footer={<button className="btn primary" onClick={() => setPreview(null)}>Close</button>}
+        >
+          <div className="col">
+            <div className="field">
+              <label>{name === 'recordings' ? 'Recording' : 'Music on hold'}</label>
+              <audio controls autoPlay src={preview.url} style={{ width: '100%' }} />
+              <span className="hint">Streamed from the console's media volume.</span>
+            </div>
+            <a className="btn" href={preview.url} download>
+              <Icon name="Download" size={15} /> Download WAV
+            </a>
+          </div>
+        </Modal>
       )}
 
       {issuedToken && (

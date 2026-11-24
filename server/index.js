@@ -26,7 +26,8 @@ import {
 } from './asterisk.js';
 import {
   aiInfo, aiConfigured, buildRecording, buildJingle, transcribe, saveMedia, mediaPath, slugify,
-  jingleDir, migrateJingleAudio, removeJingleAudio, removeRecordingFile
+  jingleDir, migrateJingleAudio, removeJingleAudio, removeRecordingFile,
+  ensureMusicAudio, recordingAudioPath, classAudioFile
 } from './ai.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -333,6 +334,11 @@ app.post('/api/entities/:entity', requireRole('operator'), (req, res) => {
   const db = getDb();
   try {
     const values = prepareBody(entity, req.body || {}, { creating: true });
+    // A new class must have audio on the media volume, or musiconhold.conf would
+    // name a directory that holds nothing.
+    if (name === 'music' && values.path) {
+      values.path = ensureMusicAudio(values.path, values.name) || values.path;
+    }
     if (name === 'users') {
       const pw = req.body?.password;
       if (!pw || String(pw).length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
@@ -379,6 +385,10 @@ app.put('/api/entities/:entity/:id', requireRole('operator'), (req, res) => {
     if (!existing) return res.status(404).json({ error: 'Record not found' });
 
     const values = prepareBody(entity, req.body || {});
+    if (name === 'music') {
+      const path = values.path ?? existing.path;
+      values.path = ensureMusicAudio(path, values.name ?? existing.name) || path;
+    }
     if (name === 'users' && req.body?.password) {
       if (String(req.body.password).length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
       values.password_hash = hashPassword(req.body.password);
@@ -619,6 +629,22 @@ app.post('/api/ai/jingle', requireRole('operator'), async (req, res, next) => {
       directory
     });
   } catch (err) { next(err); }
+});
+
+// Preview for a record's audio: recordings play their stored WAV, a music class
+// plays the first file in its directory.
+app.get('/api/entities/:entity/:id/audio', (req, res) => {
+  const name = req.params.entity;
+  if (name !== 'recordings' && name !== 'music') {
+    return res.status(404).json({ error: 'This module has no audio' });
+  }
+  const row = getDb().prepare(`SELECT * FROM ${name} WHERE id = ?`).get(Number(req.params.id));
+  if (!row) return res.status(404).json({ error: 'Record not found' });
+  const file = name === 'recordings' ? recordingAudioPath(row.filename) : classAudioFile(row.path);
+  if (!file) return res.status(404).json({ error: 'No audio file for this record' });
+  res.setHeader('Content-Type', 'audio/wav');
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.sendFile(file);
 });
 
 function sendMedia(req, res, name) {
@@ -932,29 +958,36 @@ try {
 // path that holds no audio, while their WAV sits flat in the media volume. Move
 // it into the class directory and store that path, so musiconhold.conf points at
 // files that exist and the class actually plays.
-function migrateLegacyJingles() {
+function normalizeMusicClasses() {
   const db = getDb();
   let migrated = 0;
+  let filled = 0;
   for (const row of db.prepare('SELECT id, name, path FROM music').all()) {
-    let directory = null;
+    let path = row.path;
+    let moved = false;
     try {
-      directory = migrateJingleAudio(row.path, row.name);
+      const migratedTo = migrateJingleAudio(row.path, row.name);
+      moved = Boolean(migratedTo);
+      path = migratedTo || path;
+      path = ensureMusicAudio(path, row.name) || path;
     } catch (err) {
-      console.error(`[startup] could not migrate music class "${row.name}": ${err.message}`);
+      console.error(`[startup] could not prepare music class "${row.name}": ${err.message}`);
       continue;
     }
-    if (!directory) continue;
-    db.prepare("UPDATE music SET path = ?, updated_at = datetime('now') WHERE id = ?").run(directory, row.id);
-    console.log(`[startup] moved music class "${row.name}" audio to ${directory}`);
-    migrated += 1;
+    if (path === row.path) continue;
+    db.prepare("UPDATE music SET path = ?, updated_at = datetime('now') WHERE id = ?").run(path, row.id);
+    console.log(`[startup] music class "${row.name}" now uses ${path}`);
+    if (moved) migrated += 1; else filled += 1;
   }
-  if (migrated) audit({ actor: 'system', action: 'migrate', entity: 'music', detail: { classes: migrated } });
+  if (migrated || filled) {
+    audit({ actor: 'system', action: 'migrate', entity: 'music', detail: { migrated, filled } });
+  }
 }
 
 try {
-  migrateLegacyJingles();
+  normalizeMusicClasses();
 } catch (err) {
-  console.error(`[startup] music migration failed: ${err.message}`);
+  console.error(`[startup] music normalization failed: ${err.message}`);
 }
 
 const server = app.listen(PORT, HOST, () => {

@@ -222,7 +222,7 @@ function addNote(out, startSec, durSec, note, gain, rate = OUT_RATE) {
 }
 
 /** Two-bar-turnaround progression (C – G – Am – F) with arpeggio, bass and pad. */
-function musicBed(seconds) {
+function musicBed(seconds, transpose = 0) {
   const total = Math.floor(seconds * OUT_RATE);
   const out = new Float32Array(total);
   const chords = [
@@ -237,14 +237,14 @@ function musicBed(seconds) {
   while (t < seconds) {
     const chord = chords[index % chords.length];
     // Bass on the downbeat.
-    addNote(out, t, bar * 0.95, chord[0] - 12, 0.30);
+    addNote(out, t, bar * 0.95, chord[0] - 12 + transpose, 0.30);
     // Arpeggio, eight notes per bar.
     for (let step = 0; step < 8; step += 1) {
-      const note = chord[step % chord.length] + (step >= 4 ? 12 : 0);
+      const note = chord[step % chord.length] + (step >= 4 ? 12 : 0) + transpose;
       addNote(out, t + step * (bar / 8), bar / 4, note, 0.16);
     }
     // Soft pad underneath.
-    for (const note of chord) addNote(out, t, bar, note, 0.055);
+    for (const note of chord) addNote(out, t, bar, note + transpose, 0.055);
     t += bar;
     index += 1;
   }
@@ -285,6 +285,16 @@ export async function buildJingle({ prompt, voice }) {
   return { wav: encodeWav(out), tagline, seconds };
 }
 
+/**
+ * A generated hold-music bed for a class that has no audio, so every class
+ * written into musiconhold.conf points at something that actually plays.
+ * Synthesized locally: no gateway or key needed.
+ */
+export function buildHoldMusic(className, seconds = 24) {
+  const stamp = [...String(className || 'moh')].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 997, 0);
+  return encodeWav(musicBed(seconds, (stamp % 7) - 3));
+}
+
 // ------------------------------------------------------------------- storage
 export const slugify = (value) => String(value || 'audio')
   .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'audio';
@@ -323,6 +333,53 @@ export function saveMedia(kind, name, wav, subdir) {
   const file = `${slugify(name)}-${Date.now().toString(36)}.wav`;
   writeFileSync(join(dir, file), wav);
   return file;
+}
+
+/** True when `dir` exists and holds at least one WAV. */
+function hasWav(dir) {
+  if (!dir || !existsSync(dir)) return false;
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .some((entry) => entry.isFile() && /\.wav$/i.test(entry.name));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Guarantee a music class has playable audio in the media volume. Classes with
+ * no audio anywhere are moved onto media/moh/<class> and given a generated bed;
+ * a directory that already holds audio (including a real Asterisk one) is left
+ * alone. Returns the path to store, or null when nothing changed.
+ */
+export function ensureMusicAudio(directory, className, seconds = 24) {
+  if (!className) return null;
+  const current = String(directory || '');
+  const inMedia = inside(join(MEDIA_DIR, 'moh'), current);
+  const dir = inMedia ? current : jingleDir(className);
+  if (hasWav(dir)) return inMedia ? null : dir;
+  if (!inMedia && hasWav(current)) return null;
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${slugify(className)}-${Date.now().toString(36)}.wav`), buildHoldMusic(className, seconds));
+  return dir;
+}
+
+/** Absolute WAV path for a recording row, or null when it is not on the volume. */
+export function recordingAudioPath(filename) {
+  const base = String(filename || '').split(/[\\/]/).pop().replace(/\.wav$/i, '');
+  if (!SAFE_SEGMENT.test(base)) return null;
+  const path = join(MEDIA_DIR, 'recordings', `${base}.wav`);
+  return inside(join(MEDIA_DIR, 'recordings'), path) && existsSync(path) ? path : null;
+}
+
+/** Absolute path of the first WAV in a music class directory, or null. */
+export function classAudioFile(directory) {
+  const dir = String(directory || '');
+  if (!inside(join(MEDIA_DIR, 'moh'), dir) || !existsSync(dir)) return null;
+  const entry = readdirSync(dir, { withFileTypes: true })
+    .filter((item) => item.isFile() && /\.wav$/i.test(item.name))
+    .sort((a, b) => a.name.localeCompare(b.name))[0];
+  return entry ? join(dir, entry.name) : null;
 }
 
 /**
