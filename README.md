@@ -155,8 +155,8 @@ ADMIN_PASSWORD='a-long-password' docker compose up -d
   instance with no AMI feed. Simulated calls are never written to the CDR table.
 - Point the console at Asterisk's AMI and the demo data gives way to the real thing: with
   `ami_host` / `ami_port` / `ami_user` / `ami_secret` set (Settings → Asterisk), the console keeps one
-  AMI session open, `CoreShowChannels` feeds the live channel list and `cdr_manager`'s `Cdr` events
-  are stored as call records. The AMI user needs read classes
+  AMI session open, Asterisk's channel events feed the live channel list and `cdr_manager`'s `Cdr`
+  events are stored as call records. The AMI user needs read classes
   `system,call,log,verbose,agent,user,config,reporting,cdr,dialplan` and write class `command` (for
   the hold-music reload), and `manager.conf` must bind beyond `127.0.0.1` with that address permitted.
 - Data lives in one SQLite file on the `/data` volume (WAL mode).
@@ -260,8 +260,8 @@ The Docker image was built and run as a non-root container against a fresh volum
 UI was exercised for sign-in, dashboard, the extension list and the create-extension form.
 
 **Verified against a real PBX:** with a FreePBX/Asterisk 22 AMI link configured, the console logs
-in over its persistent session, lists live channels from `CoreShowChannels`, and stores the
-`cdr_manager` records Asterisk emits at hangup. The UI was not clicked through page by page.
+in over its persistent session, tracks live channels from Asterisk's channel events, and stores
+the `cdr_manager` records Asterisk emits at hangup. The UI was not clicked through page by page.
 
 ## Limitations
 

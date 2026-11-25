@@ -501,9 +501,10 @@ export function testDialplan(number, callerId = '') {
 // --------------------------------------------------------------------------
 // Two shapes of AMI use live here. A one-shot action logs in, sends a single
 // action and closes (that is all a music-on-hold reload needs). The persistent
-// session below carries the ongoing work: a CoreShowChannels poll for the live
-// channel list, and the Cdr events cdr_manager emits when a call ends, which is
-// where real call records come from. It reconnects by itself, so a PBX restart
+// session below subscribes to events: Newchannel/Newstate/Hangup keep the live
+// channel list, and the Cdr events cdr_manager emits at hangup are the real call
+// records. (CoreShowChannels would need the `system` write class, which a
+// read-only console must not hold.) It reconnects by itself, so a PBX restart
 // reads as a short disconnect instead of a console that stops updating.
 let amiState = { connected: false, lastError: null, lastPoll: null, info: {}, channels: [] };
 
@@ -571,31 +572,6 @@ function extensionNumbers() {
   }
 }
 
-/** A CoreShowChannel event, in the shape the live UI already renders. */
-function amiChannel(headers, extensions) {
-  const caller = headers.CallerIDNum || headers.ConnectedLineNum || '';
-  const callee = headers.Exten || headers.ConnectedLineNum || headers.CallerIDNum || '';
-  const stateDesc = String(headers.ChannelStateDesc || '');
-  const queue = /queue/i.test(String(headers.Application || ''))
-    ? String(headers.ApplicationData || '').split(',')[0] || null
-    : null;
-  const talking = /up|busy/i.test(stateDesc);
-  const state = talking ? 'talking' : queue ? 'waiting' : 'ringing';
-  const direction = extensions.has(caller) ? (extensions.has(callee) ? 'internal' : 'outbound') : 'inbound';
-  return {
-    id: headers.Uniqueid || headers.Channel || String(Math.random()),
-    caller,
-    callerName: headers.CallerIDName || caller,
-    callee,
-    calleeName: headers.ConnectedLineName || callee,
-    state,
-    startedAt: Date.now() - (Number(headers.Duration) || 0) * 1000,
-    direction,
-    queue,
-    channel: headers.Channel || null
-  };
-}
-
 /** A cdr_manager `Cdr` event, stored as a real call record. */
 function amiRecordCdr(headers) {
   const uniqueid = headers.UniqueID || '';
@@ -640,7 +616,6 @@ function amiRecordCdr(headers) {
 }
 
 function amiClose(reason) {
-  if (amiSession?.poll) clearInterval(amiSession.poll);
   if (amiSession?.socket) {
     amiSession.closed = true;
     try { amiSession.socket.destroy(); } catch {}
@@ -655,17 +630,81 @@ function amiClose(reason) {
   };
 }
 
+function amiPublish(session) {
+  const extensions = extensionNumbers();
+  amiState.channels = [...session.live.values()].map((channel) => ({
+    ...channel,
+    direction: extensions.has(channel.caller)
+      ? (extensions.has(channel.callee) ? 'internal' : 'outbound')
+      : 'inbound'
+  }));
+  amiState.lastPoll = new Date().toISOString();
+}
+
+/** Track one channel from the call events Asterisk emits. */
+function amiChannelUpdate(session, headers) {
+  const id = headers.Uniqueid || headers.Channel;
+  if (!id) return;
+  const known = (value) => value && value !== '<unknown>' ? value : '';
+  const current = session.live.get(id) || {
+    id,
+    caller: '',
+    callerName: '',
+    callee: '',
+    calleeName: '',
+    state: 'ringing',
+    startedAt: Date.now(),
+    direction: 'internal',
+    queue: null,
+    channel: headers.Channel || null
+  };
+  const caller = known(headers.CallerIDNum) || current.caller;
+  const callee = known(headers.Exten) || known(headers.ConnectedLineNum) || known(headers.Destination) || current.callee;
+  const stateDesc = String(headers.ChannelStateDesc || '');
+  const state = stateDesc
+    ? (/up|busy/i.test(stateDesc) ? 'talking' : 'ringing')
+    : current.state;
+  session.live.set(id, {
+    ...current,
+    caller,
+    callerName: known(headers.CallerIDName) || known(headers.ConnectedLineName) || current.callerName || caller,
+    callee,
+    calleeName: known(headers.ConnectedLineName) || known(headers.DestCallerIDName) || current.calleeName || callee,
+    state: current.queue ? 'waiting' : state,
+    channel: headers.Channel || current.channel
+  });
+  amiPublish(session);
+}
+
+function amiChannelGone(session, headers) {
+  const id = headers.Uniqueid || headers.Channel;
+  if (id && session.live.delete(id)) amiPublish(session);
+}
+
+function amiQueue(session, headers, queue) {
+  const id = headers.Uniqueid || headers.Channel;
+  const current = id ? session.live.get(id) : null;
+  if (!current) return;
+  session.live.set(id, { ...current, queue, state: queue ? 'waiting' : 'ringing' });
+  amiPublish(session);
+}
+
 function amiDispatch(session, headers) {
-  if (headers.Event === 'CoreShowChannel') {
-    (session.batch ||= []).push(headers);
+  if (headers.Event === 'Newchannel' || headers.Event === 'Newstate'
+    || headers.Event === 'DialBegin' || headers.Event === 'DialEnd') {
+    amiChannelUpdate(session, headers);
     return;
   }
-  if (headers.Event === 'CoreShowChannelsComplete') {
-    const batch = session.batch || [];
-    session.batch = null;
-    const extensions = extensionNumbers();
-    amiState.channels = batch.map((channel) => amiChannel(channel, extensions));
-    amiState.lastPoll = new Date().toISOString();
+  if (headers.Event === 'Hangup' || headers.Event === 'SoftHangupRequest') {
+    amiChannelGone(session, headers);
+    return;
+  }
+  if (headers.Event === 'QueueCallerJoin') {
+    amiQueue(session, headers, headers.Queue || null);
+    return;
+  }
+  if (headers.Event === 'QueueCallerLeave' || headers.Event === 'QueueCallerAbandon') {
+    amiQueue(session, headers, null);
     return;
   }
   if (headers.Event === 'Cdr') {
@@ -675,9 +714,8 @@ function amiDispatch(session, headers) {
   if (headers.Response && !session.loggedIn) {
     if (/^success$/i.test(headers.Response)) {
       session.loggedIn = true;
+      session.live = new Map();
       amiState = { ...amiState, connected: true, lastError: null, lastPoll: new Date().toISOString(), channels: [] };
-      session.poll = setInterval(() => amiPoll(session), 4000);
-      amiPoll(session);
       return;
     }
     session.loginError = headers.Message || 'AMI login refused';
@@ -688,14 +726,6 @@ function amiDispatch(session, headers) {
   }
 }
 
-function amiPoll(session) {
-  if (!session.loggedIn || session.pending) return;
-  if (!session.socket || session.socket.destroyed) return;
-  session.pending = true;
-  session.batch = null;
-  session.socket.write('Action: CoreShowChannels\r\nActionID: console-poll\r\n\r\n');
-}
-
 function amiConnect() {
   if (!amiConfigured()) {
     amiState = { connected: false, lastError: null, lastPoll: new Date().toISOString(), info: {}, channels: [], simulated: true };
@@ -703,7 +733,7 @@ function amiConnect() {
   }
   if (amiSession) return;
   const { host, port, user, secret } = amiTarget();
-  const session = { socket: null, buffer: '', loggedIn: false, closed: false, poll: null, loginError: null };
+  const session = { socket: null, buffer: '', loggedIn: false, closed: false, loginError: null, live: new Map() };
   amiSession = session;
   const socket = net.createConnection({ host, port });
   session.socket = socket;
@@ -733,10 +763,6 @@ function amiConnect() {
         const colon = line.indexOf(':');
         if (colon <= 0) continue;
         headers[line.slice(0, colon).trim()] = line.slice(colon + 1).trim();
-      }
-      if (session.pending && (headers.Event === 'CoreShowChannelsComplete'
-        || (headers.Response && headers.ActionID === 'console-poll'))) {
-        session.pending = false;
       }
       amiDispatch(session, headers);
     }
