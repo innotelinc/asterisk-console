@@ -250,6 +250,188 @@ export function RecordingStudio({
   );
 }
 
+/**
+ * Give an existing recording new audio, from the microphone or from speech.
+ *
+ * This is the repair path for a row whose file is missing from the media
+ * volume: the name stays, so every IVR entry and announcement pointing at it
+ * starts working again without being re-pointed.
+ */
+function RepairAudio({
+  target, initialMode, onDone, onClose
+}: {
+  target: Recording;
+  initialMode: 'record' | 'ai';
+  onDone: () => Promise<void>;
+  onClose: () => void;
+}) {
+  const [mode, setMode] = useState<'record' | 'ai'>(initialMode);
+  const [capturing, setCapturing] = useState(false);
+  const [blob, setBlob] = useState<Blob | null>(null);
+  const [preview, setPreview] = useState('');
+  const [text, setText] = useState('');
+  const [voice, setVoice] = useState('Kore');
+  const [voices, setVoices] = useState<string[]>(['Kore']);
+  const [configured, setConfigured] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const capture = useRef<{ stop: () => Promise<Blob> } | null>(null);
+  const { push } = useToast();
+
+  useEffect(() => {
+    api.aiStatus()
+      .then((status) => {
+        setVoices(status.voices?.length ? status.voices : ['Kore']);
+        setConfigured(status.configured);
+      })
+      .catch(() => setConfigured(false));
+  }, []);
+
+  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
+  // Closing the dialog mid-recording must release the microphone.
+  useEffect(() => () => { capture.current?.stop().catch(() => {}); }, []);
+
+  const start = async () => {
+    setError('');
+    try {
+      capture.current = await startMicCapture();
+      setCapturing(true);
+    } catch (err: any) {
+      setError(err.message || 'Microphone unavailable');
+    }
+  };
+
+  const finish = async () => {
+    const active = capture.current;
+    if (!active) return;
+    capture.current = null;
+    setCapturing(false);
+    try {
+      const captured = await active.stop();
+      if (preview) URL.revokeObjectURL(preview);
+      setBlob(captured);
+      setPreview(URL.createObjectURL(captured));
+    } catch (err: any) {
+      setError(err.message || 'That recording could not be used');
+    }
+  };
+
+  const save = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      if (mode === 'ai') {
+        await api.generateRecordingAudio(target.id, { text: text.trim(), voice });
+        push(`Generated new audio for “${target.name}”`);
+      } else {
+        if (!blob) throw new Error('Record something first');
+        const res = await api.replaceRecordingAudio(target.id, blob);
+        push(res.converted
+          ? `Replaced “${target.name}” from ${res.source}, converted to 8 kHz mono WAV`
+          : `Replaced “${target.name}”`);
+      }
+      await onDone();
+      onClose();
+    } catch (err: any) {
+      setError(err.message || 'The audio could not be saved');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const ready = mode === 'ai' ? Boolean(text.trim()) : Boolean(blob);
+
+  return (
+    <Modal
+      title={`Audio for ${target.name}`}
+      subtitle="The recording keeps its name, so every IVR entry and announcement that uses it is repaired too."
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn" onClick={onClose}>Cancel</button>
+          <button className="btn primary" onClick={save} disabled={busy || !ready || capturing}>
+            {busy ? <span className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} /> : <Icon name="Save" size={15} />}
+            Save audio
+          </button>
+        </>
+      }
+    >
+      <div className="col">
+        {error && <div className="alert error"><Icon name="CircleX" size={15} /><div>{error}</div></div>}
+
+        <div className="field">
+          <label>How</label>
+          <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+            {([
+              ['record', 'Record here', 'Mic'],
+              ['ai', 'Write with AI', 'Wand2']
+            ] as ['record' | 'ai', string, string][]).map(([value, label, icon]) => (
+              <button
+                key={value}
+                type="button"
+                className={`btn ${mode === value ? 'primary' : ''}`}
+                onClick={() => { setMode(value); setError(''); }}
+                disabled={capturing}
+              >
+                <Icon name={icon} size={14} />{label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {mode === 'record' && (
+          <div className="field">
+            <label>Microphone</label>
+            <div className="row" style={{ gap: 8 }}>
+              <button className="btn" type="button" onClick={capturing ? finish : start}>
+                <Icon name={capturing ? 'CircleSlash' : 'Mic'} size={15} />
+                {capturing ? 'Stop recording' : blob ? 'Record again' : 'Start recording'}
+              </button>
+              {capturing && <span className="tiny" style={{ color: 'var(--bad, #dc2626)' }}>● recording</span>}
+            </div>
+            <span className="hint">Saved as 8 kHz mono WAV, which is what the PBX plays.</span>
+          </div>
+        )}
+
+        {mode === 'ai' && (
+          <>
+            {configured === false && (
+              <div className="alert warn">
+                <Icon name="AlertTriangle" size={15} />
+                <div>AI audio is not configured. Set <span className="mono">OMNIROUTE_API_KEY</span> to generate speech, or record it here instead.</div>
+              </div>
+            )}
+            <div className="field">
+              <label>Script *</label>
+              <textarea
+                className="textarea"
+                rows={5}
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                placeholder="Thank you for calling. Our office is closed for the holiday."
+              />
+              <span className="hint">{text.length} characters</span>
+            </div>
+            <div className="field">
+              <label>Voice</label>
+              <select className="input" value={voice} onChange={(e) => setVoice(e.target.value)}>
+                {voices.map((v) => <option key={v} value={v}>{v}</option>)}
+              </select>
+            </div>
+          </>
+        )}
+
+        {preview && (
+          <div className="field">
+            <label>Preview</label>
+            <audio controls src={preview} style={{ width: '100%' }} />
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 /* ------------------------------------------------------------- field control */
 
 export function AudioField({
@@ -267,6 +449,7 @@ export function AudioField({
   const [probeSeq, setProbeSeq] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [repair, setRepair] = useState<'record' | 'ai' | null>(null);
   const player = useRef<HTMLAudioElement | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const { push } = useToast();
@@ -404,7 +587,13 @@ export function AudioField({
             <div className="row" style={{ gap: 8, marginTop: 8 }}>
               <button className="btn" type="button" onClick={() => fileInput.current?.click()} disabled={uploading}>
                 <Icon name={uploading ? 'Loader2' : 'Upload'} size={14} />
-                {uploading ? 'Uploading…' : 'Upload audio for this recording'}
+                {uploading ? 'Uploading…' : 'Upload a file'}
+              </button>
+              <button className="btn" type="button" onClick={() => setRepair('record')}>
+                <Icon name="Mic" size={14} /> Record here
+              </button>
+              <button className="btn" type="button" onClick={() => setRepair('ai')}>
+                <Icon name="Wand2" size={14} /> Write with AI
               </button>
               <span className="tiny faint">Or choose another recording above.</span>
             </div>
@@ -423,6 +612,17 @@ export function AudioField({
         }}
       />
       {help && <span className="hint">{help}</span>}
+      {repair && current && (
+        <RepairAudio
+          target={current}
+          initialMode={repair}
+          onClose={() => setRepair(null)}
+          onDone={async () => {
+            await load();
+            setProbeSeq((n) => n + 1);
+          }}
+        />
+      )}
       {studio && (
         <RecordingStudio
           suggestName={suggestName || value || ''}

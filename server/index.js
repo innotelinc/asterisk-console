@@ -806,6 +806,34 @@ app.post('/api/entities/recordings/:id/audio', requireRole('operator'), RAW_AUDI
   }
 });
 
+// Generate speech into a recording that already exists. The row keeps its name,
+// so every destination, IVR entry and announcement that points at it is repaired
+// too — the operator does not have to delete and re-create the recording.
+app.post('/api/entities/recordings/:id/audio/ai', requireRole('operator'), async (req, res, next) => {
+  try {
+    if (!aiConfigured()) return res.status(503).json({ error: 'AI audio is not configured: set OMNIROUTE_API_KEY' });
+    const script = String(req.body?.text || '').trim();
+    if (!script) return res.status(400).json({ error: 'Script text is required' });
+    const db = getDb();
+    const row = db.prepare('SELECT * FROM recordings WHERE id = ?').get(Number(req.params.id));
+    if (!row) return res.status(404).json({ error: 'Recording not found' });
+    const wav = await buildRecording({ text: script, voice: req.body?.voice });
+    const file = saveMedia('recordings', row.name, wav);
+    db.prepare("UPDATE recordings SET filename = ?, updated_at = datetime('now') WHERE id = ?")
+      .run(`custom/${file.replace(/\.wav$/, '')}`, row.id);
+    if (row.filename) removeRecordingFile(row.filename);
+    const updated = db.prepare('SELECT * FROM recordings WHERE id = ?').get(row.id);
+    audit({
+      actor: req.session.username, action: 'ai_recording_audio', entity: 'recordings', entityId: row.id,
+      detail: { name: row.name, voice: req.body?.voice, chars: script.length }, ip: req.ip
+    });
+    res.status(201).json({ row: redact('recordings', updated, req.session), file: `/api/media/recordings/${file}`, converted: true, source: 'AI speech' });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+});
+
 app.post('/api/ai/jingle', requireRole('operator'), async (req, res, next) => {
   try {
     const brief = String(req.body?.prompt || '').trim();

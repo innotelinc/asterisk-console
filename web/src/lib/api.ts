@@ -179,6 +179,12 @@ export const api = {
     if (!res.ok) throw new ApiError((data && data.error) || `Upload failed (${res.status})`, res.status);
     return data as { row: any; file: string; converted: boolean; source: string };
   },
+  // Generate speech into a recording that already exists, so repairing one whose
+  // file is missing keeps its name and every reference to it.
+  generateRecordingAudio: (id: number, body: { text: string; voice?: string }) =>
+    request<{ row: any; file: string; converted: boolean; source: string }>(
+      `/api/entities/recordings/${id}/audio/ai`, { method: 'POST', body }
+    ),
   createJingle: (body: { name: string; prompt: string; voice?: string }) =>
     request<{ row: any; file: string; tagline: string; seconds: number; directory: string; reload: MohReload }>('/api/ai/jingle', { method: 'POST', body }),
   // Upload own hold music; the server converts it to 8 kHz mono WAV.
