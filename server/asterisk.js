@@ -718,7 +718,11 @@ function amiDispatch(session, headers) {
       amiState = { ...amiState, connected: true, lastError: null, lastPoll: new Date().toISOString(), channels: [] };
       return;
     }
+    // A refused login means the stored credentials no longer match (the PBX was
+    // rebuilt, or the secret rotated). Drop the socket so the next tick retries
+    // with whatever the settings hold now, instead of sitting on a dead session.
     session.loginError = headers.Message || 'AMI login refused';
+    amiClose(session.loginError);
     return;
   }
   if (headers.Response && /^error$/i.test(headers.Response)) {
