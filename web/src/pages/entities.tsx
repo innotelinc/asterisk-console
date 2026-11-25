@@ -163,6 +163,7 @@ export default function EntityPage({ name, meta, session }: { name: string; meta
             <>
               {entity.ai === 'recording' && <AiRecordingButton onDone={load} />}
               {entity.ai === 'jingle' && <AiJingleButton onDone={load} />}
+              {name === 'music' && <ReloadMusicButton />}
               <button className="btn" onClick={() => setImportOpen(true)}>
                 <Icon name="Upload" size={15} />
                 Import CSV
@@ -510,6 +511,36 @@ function ImportModal({
         )}
       </div>
     </Modal>
+  );
+}
+
+/**
+ * Push the class directories live on the PBX — for audio an operator dropped in
+ * by hand — and say whether Asterisk confirmed the reload.
+ */
+function ReloadMusicButton() {
+  const [busy, setBusy] = useState(false);
+  const { push } = useToast();
+
+  const reload = async () => {
+    setBusy(true);
+    try {
+      const { reload: result } = await api.reloadMusic();
+      push(result.reason, result.reloaded ? 'ok' : 'error');
+    } catch (err: any) {
+      push(err.message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <button className="btn" onClick={reload} disabled={busy}>
+      {busy
+        ? <span className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} />
+        : <Icon name="RefreshCw" size={15} />}
+      Reload hold music
+    </button>
   );
 }
 

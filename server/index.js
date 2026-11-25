@@ -687,6 +687,15 @@ app.post('/api/entities/music/:id/audio', requireRole('operator'),
     }
   });
 
+// Reload music-on-hold on demand: an operator who dropped a file into a class
+// directory can push it live without regenerating a Jingle. reloadMusicOnHold
+// always resolves with an answer, so nothing here can reject.
+app.post('/api/moh/reload', requireRole('operator'), async (req, res) => {
+  const reload = await reloadMusicOnHold();
+  audit({ actor: req.session.username, action: 'reload_music', entity: 'music', detail: { reloaded: reload.reloaded }, ip: req.ip });
+  res.json({ reload });
+});
+
 // Preview for a record's audio: recordings play their stored WAV, a music class
 // plays the first file in its directory.
 app.get('/api/entities/:entity/:id/audio', (req, res) => {

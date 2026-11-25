@@ -107,6 +107,9 @@ AMI so Asterisk plays the new files at once (the AMI user needs the `command` wr
 response says whether that reload happened, and when AMI is not configured it says plainly that
 Asterisk was not reloaded instead of implying the new audio is already live.
 
+**Reload hold music** on the Music on Hold page asks for that same reload on demand, so files dropped
+into a class directory by hand go live without generating a Jingle.
+
 `docker-compose.yml` mounts the `pbx-moh` volume at both `/data/media/moh` and the stock Asterisk
 hold-music path `/var/lib/asterisk/moh`, and `musiconhold.conf` names the stock path, so generated
 hold music plays without a manual copy. With a plain `docker run`, add both mounts:

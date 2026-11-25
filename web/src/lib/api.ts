@@ -124,6 +124,8 @@ export const api = {
     if (!res.ok) throw new ApiError((data && data.error) || `Upload failed (${res.status})`, res.status);
     return data as { file: string; directory: string; bytes: number; converted: boolean; source: string; replace: boolean; reload: MohReload };
   },
+  // Ask Asterisk to re-read the hold-music directories; says whether it did.
+  reloadMusic: () => request<{ reload: MohReload }>('/api/moh/reload', { method: 'POST' }),
   transcribe: async (blob: Blob) => {
     const res = await fetch('/api/ai/transcribe?format=wav', {
       method: 'POST',
