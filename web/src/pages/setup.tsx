@@ -71,6 +71,8 @@ function EngineInstaller({ onInstalled }: { onInstalled: (values: { host: string
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [fallback, setFallback] = useState<EngineCommand | null>(null);
+  const [build, setBuild] = useState<{ version: string; image: string; command: string } | null>(null);
+  const [buildError, setBuildError] = useState('');
   const [copied, setCopied] = useState('');
 
   const load = async () => {
@@ -124,6 +126,18 @@ function EngineInstaller({ onInstalled }: { onInstalled: (values: { host: string
 
   const chosen = engine?.versions.find((v) => v.id === version);
 
+  // Fetched when the disclosure opens: it is only interesting on a host whose
+  // rolling registry image is an older release than the line is on.
+  const loadBuild = async () => {
+    if (build?.version === version) return;
+    setBuildError('');
+    try {
+      setBuild(await api.engineBuild(version));
+    } catch (err: any) {
+      setBuildError(err.message || 'Could not build the command');
+    }
+  };
+
   return (
     <div style={{ display: 'grid', gap: 12 }}>
       <div className="alert info">
@@ -144,14 +158,12 @@ function EngineInstaller({ onInstalled }: { onInstalled: (values: { host: string
       <div className="form-grid">
         <Field
           label="Asterisk version"
-          hint={chosen
-            ? `Security support until ${chosen.support}. Image ${chosen.image}.${chosen.eol ? ' Upstream no longer ships fixes for this branch.' : ''}`
-            : undefined}
+          hint={chosen ? `Security support until ${chosen.support}. Image ${chosen.image}.` : undefined}
         >
           <select className="input" value={version} onChange={(e) => setVersion(e.target.value)} disabled={running}>
             {(engine?.versions || []).map((v) => (
               <option key={v.id} value={v.id}>
-                {v.label} · security to {v.support}{v.recommended ? ' — recommended' : ''}{v.eol ? ' — end of life' : ''}
+                {v.label} · security to {v.support}{v.recommended ? ' — recommended' : ''}
               </option>
             ))}
           </select>
@@ -165,6 +177,43 @@ function EngineInstaller({ onInstalled }: { onInstalled: (values: { host: string
           </button>
         </Field>
       </div>
+
+      {chosen && (
+        <details onToggle={(e) => { if ((e.target as HTMLDetailsElement).open) loadBuild(); }}>
+          <summary className="tiny muted" style={{ cursor: 'pointer' }}>
+            Build Asterisk {chosen.release} from source (when the registry tag is behind)
+          </summary>
+          <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>
+            <div className="tiny faint">
+              <span className="mono">{chosen.image}</span> is a rolling build and can lag the upstream
+              release. This compiles {chosen.release} from the official tarball as{' '}
+              <span className="mono">{`asterisk-console/asterisk:${chosen.release}`}</span>; the install
+              above uses that image when it exists on the host.
+            </div>
+            {buildError && (
+              <div className="alert error">
+                <Icon name="CircleX" size={15} />
+                <div>{buildError}</div>
+              </div>
+            )}
+            {build?.version === version ? (
+              <>
+                <pre className="mono" style={{ margin: 0, padding: 12, background: 'var(--bg-inset, #0f172a)', color: 'var(--text)', borderRadius: 8, overflowX: 'auto', fontSize: 11.5, lineHeight: 1.6 }}>
+                  {build.command}
+                </pre>
+                <div className="row" style={{ justifyContent: 'flex-end' }}>
+                  <button className="btn" type="button" onClick={() => copy(build.command, 'build')}>
+                    <Icon name={copied === 'build' ? 'Check' : 'Copy'} size={14} />
+                    {copied === 'build' ? 'Copied' : 'Copy build'}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <span className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} />
+            )}
+          </div>
+        </details>
+      )}
 
       {engine && engine.docker.available && engine.docker.error && (
         <div className="alert error">
@@ -201,7 +250,8 @@ function EngineInstaller({ onInstalled }: { onInstalled: (values: { host: string
         <div className="alert info">
           <Icon name="CircleCheck" size={15} />
           <div>
-            {engine.versions.find((v) => v.id === engine.installed?.version)?.label || 'Asterisk'}
+            {engine.versions.find((v) => v.id === engine.installed?.version)?.label
+              || (engine.installed.version ? `Asterisk ${engine.installed.version}` : 'Asterisk')}
             {' '}(<span className="mono">{engine.installed.image}</span>) is {engine.installed.running ? 'running' : 'stopped'} ({engine.installed.status}).
             AMI is reachable at <span className="mono">{engine.settings.ami_host}:{engine.settings.ami_port}</span>.
           </div>

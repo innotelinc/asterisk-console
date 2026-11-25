@@ -22,10 +22,14 @@ simply empty rather than full of sample extensions.
 ### Letting the wizard install Asterisk
 
 The Asterisk step offers two paths: connect to a PBX you already run, or install one. The install
-path picks one of the long-term-support lines — **22 LTS** (recommended), **24 LTS** (still a
-release candidate upstream, so it pulls `24-rc`), or **20 LTS** — each shown with its upstream
-security-support date, and starts one container from `andrius/asterisk:<version>`. The installed version is named in the wizard, and re-running it from
-Settings switches the engine to another line while keeping the configuration and the AMI secret.
+path picks one of the long-term-support lines — **22 LTS** (recommended, 22.12.0), **24 LTS**
+(24.0.0) or **20 LTS** (20.22.0) — each shown with its upstream security-support date, and starts
+one container from `andrius/asterisk:<version>`. Those tags are rolling builds and can lag the
+release they name; `asterisk/Dockerfile` compiles the current one, and the installer prefers a
+locally built `asterisk-console/asterisk:<release>` image when the host has one. The installed
+version is named in the wizard — including a line the picker no longer offers — and re-running it
+from Settings switches the engine to another line while keeping the configuration and the AMI
+secret.
 
 - `/etc/asterisk` is this console's own `<data>/pbx` directory, so *apply to disk* writes the files
   the running Asterisk reads;
@@ -35,6 +39,18 @@ Settings switches the engine to another line while keeping the configuration and
   AMI port is published;
 - SIP and the RTP range are published one-to-one on `pbx_sip_port` and `pbx_rtp_start..end`
   (Settings → Asterisk), matching the transport and `rtp.conf` the console generates.
+
+Where the rolling tag is behind — 24.0.0 shipped on 5 November 2026 while `24-rc` still carried
+rc3 — compile the release the wizard names. It prints the command under *Build Asterisk … from
+source*; the same thing by hand is:
+
+```sh
+docker build -t asterisk-console/asterisk:24.0.0 \
+  --build-arg ASTERISK_VERSION=24.0.0 asterisk
+```
+
+That image runs as uid 1000, the uid the console writes its configuration with, and carries no
+configuration of its own: the console still mounts `<data>/pbx` at `/etc/asterisk`.
 
 Reinstalling keeps the configuration files and the AMI secret. Installing needs the Docker socket,
 which is host-root-equivalent access, so it is opt-in:

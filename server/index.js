@@ -26,8 +26,8 @@ import {
   reloadMusicOnHold, testAmiConnection
 } from './asterisk.js';
 import {
-  engineStatus, startEngineInstall, engineCommand, engineCompose, engineVersion,
-  prepareEngineConfig, ENGINE_VERSIONS, ENGINE_CONTAINER
+  engineStatus, startEngineInstall, engineCommand, engineCompose, engineBuildCommand, engineVersion,
+  engineSourceImage, prepareEngineConfig, ENGINE_VERSIONS, ENGINE_CONTAINER
 } from './pbx-engine.js';
 import {
   aiInfo, aiConfigured, buildRecording, buildJingle, transcribe, saveMedia, mediaPath, slugify,
@@ -620,6 +620,14 @@ app.get('/api/setup/engine/command', requireRole('admin'), (req, res) => {
   const written = prepareEngineConfig();
   audit({ actor: req.session.username, action: 'engine_command', entity: 'settings', detail: { version, written }, ip: req.ip });
   res.json({ version, command: engineCommand(version), compose: engineCompose(version) });
+});
+
+// The from-source build for a line, for when the rolling registry tag is behind
+// the upstream release the wizard names.
+app.get('/api/setup/engine/build', requireRole('admin'), (req, res) => {
+  const version = String(req.query.version || '');
+  if (!engineVersion(version)) return res.status(400).json({ error: `Unknown Asterisk version "${version}"` });
+  res.json({ version, image: engineSourceImage(engineVersion(version)), command: engineBuildCommand(version) });
 });
 
 app.post('/api/setup/complete', requireRole('admin'), (req, res) => {

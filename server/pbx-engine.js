@@ -35,19 +35,42 @@ const ENGINE_LABEL = 'com.asterisk-console.engine';
 
 /**
  * The Asterisk long-term-support lines the console can install: 22 (current
- * LTS), 24 (next LTS, still a release candidate upstream) and 20 (previous
- * LTS). The images are the maintained multi-arch builds from andrius/asterisk;
- * the support date is the upstream end-of-security-support date, so the picker
+ * LTS), 24 (LTS, released 5 November 2026) and 20 (previous LTS). `image` is
+ * the maintained rolling build from andrius/asterisk and `release` the upstream
+ * tarball that line is on; the two drift, because the rolling tag is rebuilt on
+ * the publisher's schedule. When a locally built
+ * `asterisk-console/asterisk:<release>` image exists the installer prefers it,
+ * so an operator can compile the current release from asterisk/Dockerfile.
+ * The support date is the upstream end-of-security-support date, so the picker
  * says what you are committing to.
  */
 export const ENGINE_VERSIONS = [
-  { id: '22', label: 'Asterisk 22 LTS', image: 'andrius/asterisk:22', support: '2029-10', recommended: true },
-  { id: '24', label: 'Asterisk 24 LTS (release candidate)', image: 'andrius/asterisk:24-rc', support: '2031-10' },
-  { id: '20', label: 'Asterisk 20 LTS', image: 'andrius/asterisk:20', support: '2027-10' }
+  { id: '22', label: 'Asterisk 22 LTS', image: 'andrius/asterisk:22', release: '22.12.0', support: '2029-10', recommended: true },
+  { id: '24', label: 'Asterisk 24 LTS', image: 'andrius/asterisk:24-rc', release: '24.0.0', support: '2031-10' },
+  { id: '20', label: 'Asterisk 20 LTS', image: 'andrius/asterisk:20', release: '20.22.0', support: '2027-10' }
 ];
 
 export function engineVersion(id) {
   return ENGINE_VERSIONS.find((v) => v.id === String(id)) || null;
+}
+
+/** The tag a source build of this line produces. */
+export function engineSourceImage(chosen) {
+  return `asterisk-console/asterisk:${chosen.release}`;
+}
+
+/**
+ * The image a source build of this line produced, when the host has one. It is
+ * the current release even while the rolling registry tag is an older one.
+ */
+async function builtImage(chosen) {
+  const image = engineSourceImage(chosen);
+  try {
+    await docker('GET', `/images/${encodeURIComponent(image)}/json`);
+    return image;
+  } catch {
+    return null;
+  }
 }
 
 /** Where the console keeps the Asterisk configuration it writes. */
@@ -399,12 +422,22 @@ export function startEngineInstall(version) {
   installState = { phase: 'pulling', message: `Pulling ${chosen.image}…`, error: null, startedAt: new Date().toISOString(), finishedAt: null };
 
   installRunning = (async () => {
+    let usedRegistry = false;
     try {
-      await pullImage('andrius/asterisk', chosen.image.split(':')[1], (status) => {
-        if (status && status !== 'Downloading') {
-          installState = { ...installState, message: `${status} ${chosen.image}` };
-        }
-      });
+      // A source build of the current release wins over the rolling tag: the
+      // operator built it because the tag was behind.
+      const built = await builtImage(chosen);
+      const image = built || chosen.image;
+      if (built) {
+        installState = { ...installState, phase: 'configuring', message: `Using the locally built ${built}…` };
+      } else {
+        usedRegistry = true;
+        await pullImage('andrius/asterisk', chosen.image.split(':')[1], (status) => {
+          if (status && status !== 'Downloading') {
+            installState = { ...installState, message: `${status} ${chosen.image}` };
+          }
+        });
+      }
 
       installState = { ...installState, phase: 'configuring', message: 'Writing manager.conf and the base configuration…' };
       ensureManagerSecret(cfg);
@@ -431,7 +464,7 @@ export function startEngineInstall(version) {
 
       const created = await docker('POST', `/containers/create?name=${ENGINE_CONTAINER}`, {
         body: {
-          Image: chosen.image,
+          Image: image,
           Env: ['PUID=1000', 'PGID=1000'],
           Labels: { [ENGINE_LABEL]: chosen.id, 'com.asterisk-console.version': chosen.id },
           ExposedPorts: Object.fromEntries(Object.keys(ports).map((p) => [p, {}])),
@@ -473,10 +506,13 @@ export function startEngineInstall(version) {
         finishedAt: new Date().toISOString()
       };
     } catch (err) {
+      const hint = usedRegistry
+        ? ` The rolling ${chosen.image} tag can lag the ${chosen.release} release; the wizard can build that release from source instead.`
+        : '';
       installState = {
         phase: 'error',
         message: installState.message,
-        error: err.message,
+        error: `${err.message}${hint}`,
         startedAt: installState.startedAt,
         finishedAt: new Date().toISOString()
       };
@@ -552,6 +588,25 @@ export function engineCommand(version) {
     `  -p ${cfg.sipPort}:${cfg.sipPort}/udp -p ${cfg.rtpStart}-${cfg.rtpEnd}:${cfg.rtpStart}-${cfg.rtpEnd}/udp \\`,
     `  -p 5038:5038 \\`,
     `  ${chosen.image}`
+  ].join('\n');
+}
+
+/**
+ * How to compile the release this line is on, for a host whose rolling registry
+ * image still ships an older one. The image it produces is the one the
+ * installer picks up on the next attempt.
+ */
+export function engineBuildCommand(version) {
+  const chosen = engineVersion(version) || ENGINE_VERSIONS[0];
+  return [
+    `# Asterisk ${chosen.release}, compiled from the official release tarball.`,
+    '# Takes a while (configure plus a full build); run it on the Docker host.',
+    'git clone --depth 1 https://github.com/innotelinc/asterisk-console.git /tmp/asterisk-console',
+    `docker build -t ${engineSourceImage(chosen)} \\`,
+    `  --build-arg ASTERISK_VERSION=${chosen.release} \\`,
+    '  /tmp/asterisk-console/asterisk',
+    '',
+    '# Then install again from this wizard: it uses the image it finds locally.'
   ].join('\n');
 }
 

@@ -12,8 +12,8 @@ export type SetupState = {
     ast_config_dir: string;
   };
 };
-/** An Asterisk line the console can install, with its upstream support date. */
-export type EngineVersion = { id: string; label: string; image: string; support: string; recommended?: boolean; eol?: boolean };
+/** An Asterisk line the console can install, with its upstream release and support date. */
+export type EngineVersion = { id: string; label: string; image: string; release: string; support: string; recommended?: boolean };
 /** Docker reachability, the engine container if one exists, and install progress. */
 export type EngineState = {
   docker: { available: boolean; socket: string; error: string | null };
@@ -103,6 +103,9 @@ export const api = {
       '/api/setup/engine/install', { method: 'POST', body: { version } }
     ),
   engineCommand: (version: string) => request<EngineCommand>(`/api/setup/engine/command?version=${encodeURIComponent(version)}`),
+  // The from-source build for a line, when the rolling registry tag is behind.
+  engineBuild: (version: string) =>
+    request<{ version: string; image: string; command: string }>(`/api/setup/engine/build?version=${encodeURIComponent(version)}`),
 
   meta: () => request<Meta>('/api/meta'),
   list: (entity: string, query: Record<string, any> = {}) => {
