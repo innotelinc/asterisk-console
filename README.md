@@ -54,8 +54,13 @@ docker run -d --name docker-socket-proxy --restart unless-stopped --network cool
   -e CONTAINERS=1 -e IMAGES=1 -e NETWORKS=1 -e POST=1 -e INFO=1 -e VERSION=1 -e PING=1 \
   -e ALLOW_START=1 -e ALLOW_STOP=1 -e ALLOW_RESTARTS=1 -e EXEC=0 -e VOLUMES=0 \
   -v /var/run/docker.sock:/var/run/docker.sock:ro tecnativa/docker-socket-proxy:latest
-docker run -d ... -e DOCKER_HOST=tcp://docker-socket-proxy:2375 asterisk-console
+docker run -d ... -e PBX_DOCKER_HOST=tcp://docker-socket-proxy:2375 asterisk-console
 ```
+
+The console reads `PBX_DOCKER_HOST` (falling back to `DOCKER_HOST`). Use the
+prefixed name on a platform that exports `DOCKER_HOST` to its own builder:
+Coolify passes it into the image build, where the CLI then tries to reach the
+docker daemon through it and the build fails.
 
 Without a Docker endpoint the wizard prints the exact `docker run` — and an equivalent compose file — for
 the chosen version. Both mount `PBX_DIR`, the host path of this console's data directory, and the

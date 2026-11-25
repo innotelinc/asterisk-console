@@ -67,7 +67,9 @@ function socketPath() {
  * refuses bind mounts, for one) and runs a socket proxy instead.
  */
 function dockerTarget() {
-  const host = String(process.env.DOCKER_HOST || '');
+  // PBX_DOCKER_HOST first: a platform that exports DOCKER_HOST for its own
+  // builder will otherwise point the build at the proxy and fail the build.
+  const host = String(process.env.PBX_DOCKER_HOST || process.env.DOCKER_HOST || '');
   const match = /^tcp:\/\/([^:/]+):(\d+)$/.exec(host);
   if (match) return { host: match[1], port: Number(match[2]) };
   return { socketPath: socketPath() };
