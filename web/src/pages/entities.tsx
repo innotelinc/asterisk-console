@@ -185,7 +185,7 @@ export default function EntityPage({ name, meta, session }: { name: string; meta
               </button>
               <button className="btn primary" onClick={() => setEditing({ __new: true })}>
                 <Icon name="Plus" size={15} />
-                New {entity.label.toLowerCase()}
+                New {entity.label}
               </button>
             </>
           )}
@@ -220,10 +220,10 @@ export default function EntityPage({ name, meta, session }: { name: string; meta
             <EmptyState
               icon={entity.icon}
               title={query ? `No matching ${entity.plural.toLowerCase()}` : `No ${entity.plural.toLowerCase()} yet`}
-              message={query ? 'Try a different search term.' : `Create your first ${entity.label.toLowerCase()} to get started.`}
+              message={query ? 'Try a different search term.' : `Create your first ${entity.label} to get started.`}
               action={canWrite && !query ? (
                 <button className="btn primary" style={{ marginTop: 6 }} onClick={() => setEditing({ __new: true })}>
-                  <Icon name="Plus" size={15} /> New {entity.label.toLowerCase()}
+                  <Icon name="Plus" size={15} /> New {entity.label}
                 </button>
               ) : undefined}
             />
@@ -260,7 +260,7 @@ export default function EntityPage({ name, meta, session }: { name: string; meta
 
       {confirming && (
         <Confirm
-          title={`Delete ${entity.label.toLowerCase()}`}
+          title={`Delete ${entity.label}`}
           message={
             <>
               <strong>{titleOf(confirming)}</strong> will be removed permanently. Generated Asterisk configuration
@@ -392,7 +392,7 @@ function EntityForm({
 
   return (
     <Modal
-      title={row ? `Edit ${entity.label.toLowerCase()}` : `New ${entity.label.toLowerCase()}`}
+      title={row ? `Edit ${entity.label}` : `New ${entity.label}`}
       subtitle={row && primary ? String(row[primary.key]) : `Fields marked * are required.`}
       onClose={onClose}
       wide
@@ -401,7 +401,7 @@ function EntityForm({
           <button className="btn" onClick={onClose} type="button">Cancel</button>
           <button className="btn primary" onClick={submit} disabled={busy}>
             {busy ? <span className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} /> : <Icon name="Save" size={15} />}
-            {row ? 'Save changes' : `Create ${entity.label.toLowerCase()}`}
+            {row ? 'Save changes' : `Create ${entity.label}`}
           </button>
         </>
       }

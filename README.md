@@ -22,9 +22,11 @@ simply empty rather than full of sample extensions.
 ### Letting the wizard install Asterisk
 
 The Asterisk step offers two paths: connect to a PBX you already run, or install one. The install
-path picks an Asterisk line — **22 LTS** (recommended), **20 LTS**, **23**, or the **24 LTS** release
-candidate, each with its upstream security-support date — and starts one container from
-`andrius/asterisk:<version>`:
+path picks an Asterisk line — **22 LTS** (recommended), **24 LTS** release candidate, **23**,
+**20 LTS**, and the end-of-life **21**, **19** and **18 LTS** branches for compatibility work, each
+shown with its upstream security-support date — and starts one container from
+`andrius/asterisk:<version>`. The installed version is named in the wizard, and re-running it from
+Settings switches the engine to another line while keeping the configuration and the AMI secret.
 
 - `/etc/asterisk` is this console's own `<data>/pbx` directory, so *apply to disk* writes the files
   the running Asterisk reads;

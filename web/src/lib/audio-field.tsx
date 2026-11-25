@@ -263,6 +263,13 @@ export function AudioField({
   const [recordings, setRecordings] = useState<Recording[]>([]);
   const [studio, setStudio] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [probe, setProbe] = useState<{ state: 'checking' | 'ok' | 'missing' | 'error'; note: string }>({ state: 'checking', note: '' });
+  const [probeSeq, setProbeSeq] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const player = useRef<HTMLAudioElement | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const { push } = useToast();
 
   const load = async () => {
     setBusy(true);
@@ -281,6 +288,82 @@ export function AudioField({
   const current = recordings.find((r) => r.name === value);
   const known = Boolean(current) || !value;
 
+  // A recording row can exist while its WAV is missing from the media volume —
+  // an import, a reinstall, a file deleted by hand. Say that instead of
+  // rendering a player that silently does nothing when the operator presses it.
+  useEffect(() => {
+    if (!current) {
+      setProbe({ state: 'ok', note: '' });
+      return;
+    }
+    let cancelled = false;
+    setProbe({ state: 'checking', note: '' });
+    fetch(audioUrl(current.id), { method: 'HEAD', credentials: 'same-origin' })
+      .then((res) => {
+        if (cancelled) return;
+        setProbe(res.ok
+          ? { state: 'ok', note: '' }
+          : {
+              state: 'missing',
+              note: res.status === 404
+                ? `There is no audio file for “${current.name}” on the media volume.`
+                : `The audio for “${current.name}” could not be loaded (${res.status}).`
+            });
+      })
+      .catch(() => {
+        if (!cancelled) setProbe({ state: 'error', note: 'The console could not be reached to load this audio.' });
+      });
+    return () => { cancelled = true; };
+  }, [current?.id, probeSeq]);
+
+  useEffect(() => () => { player.current?.pause(); }, []);
+
+  const stop = () => {
+    player.current?.pause();
+    player.current = null;
+    setPlaying(false);
+  };
+
+  // Play the selected recording from here, so playback is one button that
+  // either plays or explains why it cannot, instead of only the browser's own
+  // controls on a file that may not exist.
+  const play = async () => {
+    if (!current) return;
+    if (playing) { stop(); return; }
+    stop();
+    const audio = new Audio(audioUrl(current.id));
+    player.current = audio;
+    audio.onended = () => setPlaying(false);
+    audio.onerror = () => {
+      setPlaying(false);
+      setProbe({ state: 'missing', note: `“${current.name}” is not a playable WAV file on the media volume.` });
+    };
+    try {
+      await audio.play();
+      setPlaying(true);
+    } catch (err: any) {
+      setPlaying(false);
+      push(err?.message || 'The browser blocked playback', 'error');
+    }
+  };
+
+  const upload = async (file: File) => {
+    if (!current) return;
+    setUploading(true);
+    try {
+      const res = await api.replaceRecordingAudio(current.id, file);
+      push(res.converted
+        ? `Replaced “${current.name}” from ${res.source}, converted to 8 kHz mono WAV`
+        : `Replaced “${current.name}”`);
+      await load();
+      setProbeSeq((n) => n + 1);
+    } catch (err: any) {
+      push(err.message, 'error');
+    } finally {
+      setUploading(false);
+    }
+  };
+
   return (
     <div className="field span-2">
       <label>Recording</label>
@@ -296,13 +379,49 @@ export function AudioField({
           {recordings.map((r) => <option key={r.id} value={r.name}>{r.name}</option>)}
           {value && !known && <option value={value}>{value} (missing)</option>}
         </select>
+        <button className="btn" type="button" onClick={play} disabled={!current || probe.state !== 'ok'}>
+          <Icon name={playing ? 'CircleSlash' : 'Play'} size={15} />{playing ? 'Stop' : 'Play'}
+        </button>
         <button className="btn" type="button" onClick={() => setStudio(true)}>
           <Icon name="Plus" size={15} /> New recording
         </button>
       </div>
-      {current && (
-        <audio controls src={audioUrl(current.id)} style={{ width: '100%', marginTop: 8 }} />
+      {current && probe.state === 'checking' && <span className="hint">Checking the audio file…</span>}
+      {current && probe.state === 'ok' && (
+        <audio
+          key={current.id}
+          controls
+          src={audioUrl(current.id)}
+          style={{ width: '100%', marginTop: 8 }}
+          onError={() => setProbe({ state: 'missing', note: `“${current.name}” is not a playable WAV file on the media volume.` })}
+        />
       )}
+      {current && (probe.state === 'missing' || probe.state === 'error') && (
+        <div className="alert warn" style={{ marginTop: 8 }}>
+          <Icon name="AlertTriangle" size={15} />
+          <div>
+            <div>{probe.note}</div>
+            <div className="row" style={{ gap: 8, marginTop: 8 }}>
+              <button className="btn" type="button" onClick={() => fileInput.current?.click()} disabled={uploading}>
+                <Icon name={uploading ? 'Loader2' : 'Upload'} size={14} />
+                {uploading ? 'Uploading…' : 'Upload audio for this recording'}
+              </button>
+              <span className="tiny faint">Or choose another recording above.</span>
+            </div>
+          </div>
+        </div>
+      )}
+      <input
+        ref={fileInput}
+        type="file"
+        hidden
+        accept="audio/*,.wav,.mp3,.ogg,.oga,.opus,.m4a,.aac,.flac,.wma,.aiff"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = '';
+          if (file) upload(file);
+        }}
+      />
       {help && <span className="hint">{help}</span>}
       {studio && (
         <RecordingStudio

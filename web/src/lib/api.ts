@@ -13,7 +13,7 @@ export type SetupState = {
   };
 };
 /** An Asterisk line the console can install, with its upstream support date. */
-export type EngineVersion = { id: string; label: string; image: string; support: string; recommended?: boolean };
+export type EngineVersion = { id: string; label: string; image: string; support: string; recommended?: boolean; eol?: boolean };
 /** Docker reachability, the engine container if one exists, and install progress. */
 export type EngineState = {
   docker: { available: boolean; socket: string; error: string | null };

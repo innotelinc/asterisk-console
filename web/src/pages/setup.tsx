@@ -144,11 +144,15 @@ function EngineInstaller({ onInstalled }: { onInstalled: (values: { host: string
       <div className="form-grid">
         <Field
           label="Asterisk version"
-          hint={chosen ? `Security support until ${chosen.support}. Image ${chosen.image}.` : undefined}
+          hint={chosen
+            ? `Security support until ${chosen.support}. Image ${chosen.image}.${chosen.eol ? ' Upstream no longer ships fixes for this branch.' : ''}`
+            : undefined}
         >
           <select className="input" value={version} onChange={(e) => setVersion(e.target.value)} disabled={running}>
             {(engine?.versions || []).map((v) => (
-              <option key={v.id} value={v.id}>{v.label}{v.recommended ? ' — recommended' : ''}</option>
+              <option key={v.id} value={v.id}>
+                {v.label} · security to {v.support}{v.recommended ? ' — recommended' : ''}{v.eol ? ' — end of life' : ''}
+              </option>
             ))}
           </select>
         </Field>
@@ -197,7 +201,8 @@ function EngineInstaller({ onInstalled }: { onInstalled: (values: { host: string
         <div className="alert info">
           <Icon name="CircleCheck" size={15} />
           <div>
-            {engine.installed.image} is {engine.installed.running ? 'running' : 'stopped'} ({engine.installed.status}).
+            {engine.versions.find((v) => v.id === engine.installed?.version)?.label || 'Asterisk'}
+            {' '}(<span className="mono">{engine.installed.image}</span>) is {engine.installed.running ? 'running' : 'stopped'} ({engine.installed.status}).
             AMI is reachable at <span className="mono">{engine.settings.ami_host}:{engine.settings.ami_port}</span>.
           </div>
         </div>
