@@ -151,6 +151,8 @@ ADMIN_PASSWORD='a-long-password' docker compose up -d
 - `SEED_DEMO=1` (default) loads a working configuration: 6 extensions, 2 trunks, 3 DIDs,
   inbound/outbound routes, 2 ring groups, 2 queues, an IVR, time groups/conditions, voicemail,
   parking, DISA, feature codes, contacts, music classes and call history.
+- `SIMULATE_CALLS=1` (off by default) animates live channel activity on the dashboard for a demo
+  instance with no AMI feed. Simulated calls are never written to the CDR table.
 - Data lives in one SQLite file on the `/data` volume (WAL mode).
 - No native modules, no build toolchain, no Redis, no MariaDB, no PHP-FPM.
 - `HEALTHCHECK` hits `/api/health`; `SESSION_SECRET` makes sessions survive restarts.
@@ -259,7 +261,8 @@ page.
 
 - Asterisk is not bundled: this container manages configuration and state; point
   `ast_config_dir` at a shared volume (or mount it) and reload Asterisk after applying.
-- Demo call history and channel activity are generated. Real CDRs come from your CDR database or
-  an AMI/ARI feed; the schema is already in place.
+- Demo call history is seeded once by `SEED_DEMO`, and live channel activity can be animated with
+  `SIMULATE_CALLS=1`; neither writes simulated calls into `cdr` after boot. Real CDRs come from
+  your CDR database or an AMI/ARI feed; the schema is already in place.
 - FreePBX `.conf` imports, commercial modules (endpoint manager, fax pro, etc.) and PHP hook
   modules are out of scope by design.

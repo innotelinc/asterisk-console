@@ -31,6 +31,9 @@ services:
       ADMIN_USER: "${ADMIN_USER:-admin}"
       # Seed a working demo configuration on an empty database.
       SEED_DEMO: "${SEED_DEMO:-1}"
+      # Cosmetic live-call animation for a demo with no AMI feed; never writes
+      # CDR rows. Off unless explicitly switched on.
+      SIMULATE_CALLS: "${SIMULATE_CALLS:-0}"
       # Set a long random value so sessions survive container restarts.
       SESSION_SECRET: "${SESSION_SECRET:-}"
       # Only set to 1 behind a trusted reverse proxy (honours X-Forwarded-For).

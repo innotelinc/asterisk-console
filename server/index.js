@@ -40,6 +40,11 @@ const WEB_DIST = join(__dirname, '..', 'web', 'dist');
 ensureSchema();
 if (process.env.SEED_DEMO !== '0') seedDemo();
 
+// Live channel activity is cosmetic demo data for an instance with no AMI feed.
+// It is opt-in, and it never writes call records: the cdr table is for real
+// records from Asterisk, so a demo instance must not fill it with fake calls.
+const SIMULATE_CALLS = process.env.SIMULATE_CALLS === '1';
+
 const SCHEMA_VERSION = '1.0.0';
 const app = express();
 app.disable('x-powered-by');
@@ -895,25 +900,9 @@ function simulateCalls() {
     const age = Date.now() - call.startedAt;
     if (call.state === 'ringing' && age > 4000) call.state = 'talking';
     if (call.state === 'waiting' && age > 6000) call.state = 'talking';
-    if (age > 45000) {
-      db.prepare(
-        `INSERT INTO cdr (calldate, uniqueid, clid, src, dst, dcontext, channel, dstchannel, duration, billsec, disposition, direction, queue, answered_by)
-         VALUES (datetime('now'), ?, ?, ?, ?, 'from-internal', ?, ?, ?, ?, 'ANSWERED', ?, ?, ?)`
-      ).run(
-        call.id,
-        `"${call.callerName}" <${call.caller}>`,
-        call.caller,
-        call.callee,
-        `PJSIP/${call.caller}-${id.slice(0, 6)}`,
-        `PJSIP/${call.callee}-${id.slice(0, 6)}`,
-        Math.round(age / 1000),
-        Math.round(age / 1000) - 4,
-        call.direction,
-        call.queue,
-        call.callee
-      );
-      activeCalls.delete(id);
-    }
+    // The call simply ends. Nothing is written to cdr: a simulated call must
+    // never masquerade as a real record in the call history or its exports.
+    if (age > 45000) activeCalls.delete(id);
   }
 }
 
@@ -946,12 +935,11 @@ app.get('/api/events', (req, res) => {
 });
 
 setInterval(() => {
-  // Only model channel activity while someone is watching, so an idle
-  // container never writes call records on its own.
-  if (sseClients.size) {
-    simulateCalls();
-    broadcast();
-  }
+  if (!sseClients.size) return;
+  // Only model channel activity when it is switched on, and only while someone
+  // is watching; an idle or default instance never invents calls.
+  if (SIMULATE_CALLS) simulateCalls();
+  broadcast();
 }, 4000);
 
 setInterval(() => { refreshAmi().catch(() => {}); }, 15000);
