@@ -497,9 +497,17 @@ export function testDialplan(number, callerId = '') {
 }
 
 // --------------------------------------------------------------------------
-// Optional AMI client (read-only status polling)
+// AMI client: live channels and real call records
 // --------------------------------------------------------------------------
+// Two shapes of AMI use live here. A one-shot action logs in, sends a single
+// action and closes (that is all a music-on-hold reload needs). The persistent
+// session below carries the ongoing work: a CoreShowChannels poll for the live
+// channel list, and the Cdr events cdr_manager emits when a call ends, which is
+// where real call records come from. It reconnects by itself, so a PBX restart
+// reads as a short disconnect instead of a console that stops updating.
 let amiState = { connected: false, lastError: null, lastPoll: null, info: {}, channels: [] };
+
+let amiSession = null;
 
 export function amiConfigured() {
   return Boolean(getSetting('ami_host', '') && getSetting('ami_user', ''));
@@ -543,29 +551,205 @@ function amiAction(action, headers = {}) {
   });
 }
 
-export async function refreshAmi() {
+function amiTarget() {
+  return {
+    host: getSetting('ami_host'),
+    port: Number(getSetting('ami_port', '5038')) || 5038,
+    user: getSetting('ami_user'),
+    secret: getSetting('ami_secret')
+  };
+}
+
+/** The extensions we manage, so a channel can be classed as internal or not. */
+function extensionNumbers() {
+  try {
+    return new Set(
+      getDb().prepare('SELECT extension FROM extensions WHERE enabled = 1').all().map((r) => String(r.extension))
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+/** A CoreShowChannel event, in the shape the live UI already renders. */
+function amiChannel(headers, extensions) {
+  const caller = headers.CallerIDNum || headers.ConnectedLineNum || '';
+  const callee = headers.Exten || headers.ConnectedLineNum || headers.CallerIDNum || '';
+  const stateDesc = String(headers.ChannelStateDesc || '');
+  const queue = /queue/i.test(String(headers.Application || ''))
+    ? String(headers.ApplicationData || '').split(',')[0] || null
+    : null;
+  const talking = /up|busy/i.test(stateDesc);
+  const state = talking ? 'talking' : queue ? 'waiting' : 'ringing';
+  const direction = extensions.has(caller) ? (extensions.has(callee) ? 'internal' : 'outbound') : 'inbound';
+  return {
+    id: headers.Uniqueid || headers.Channel || String(Math.random()),
+    caller,
+    callerName: headers.CallerIDName || caller,
+    callee,
+    calleeName: headers.ConnectedLineName || callee,
+    state,
+    startedAt: Date.now() - (Number(headers.Duration) || 0) * 1000,
+    direction,
+    queue,
+    channel: headers.Channel || null
+  };
+}
+
+/** A cdr_manager `Cdr` event, stored as a real call record. */
+function amiRecordCdr(headers) {
+  const uniqueid = headers.UniqueID || '';
+  if (!uniqueid) return;
+  try {
+    const db = getDb();
+    const disposition = String(headers.Disposition || 'ANSWERED').toUpperCase();
+    const duration = Number(headers.Duration) || 0;
+    const billsec = Number(headers.BillableSeconds) || 0;
+    const existing = db.prepare('SELECT id FROM cdr WHERE uniqueid = ?').get(uniqueid);
+    if (existing) {
+      // Asterisk sends the record again when the CDR is finalized: keep the final numbers.
+      db.prepare('UPDATE cdr SET duration = ?, billsec = ?, disposition = ? WHERE id = ?')
+        .run(duration, billsec, disposition, existing.id);
+      return;
+    }
+    const dcontext = headers.DestinationContext || '';
+    const direction = /from-trunk|from-pstn|from-external/.test(dcontext) ? 'inbound' : 'internal';
+    db.prepare(
+      `INSERT INTO cdr (calldate, uniqueid, clid, src, dst, dcontext, channel, dstchannel,
+                        duration, billsec, disposition, direction, queue, answered_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      headers.StartTime || new Date().toISOString().slice(0, 19),
+      uniqueid,
+      headers.CallerID || '',
+      headers.Source || '',
+      headers.Destination || '',
+      dcontext,
+      headers.Channel || '',
+      headers.DestinationChannel || '',
+      duration,
+      billsec,
+      disposition,
+      direction,
+      headers.UserField || null,
+      null
+    );
+  } catch (err) {
+    console.error('[ami] could not store call record:', err.message);
+  }
+}
+
+function amiClose(reason) {
+  if (amiSession?.poll) clearInterval(amiSession.poll);
+  if (amiSession?.socket) {
+    amiSession.closed = true;
+    try { amiSession.socket.destroy(); } catch {}
+  }
+  amiSession = null;
+  amiState = {
+    ...amiState,
+    connected: false,
+    lastError: reason || amiState.lastError,
+    channels: [],
+    lastPoll: new Date().toISOString()
+  };
+}
+
+function amiDispatch(session, headers) {
+  if (headers.Event === 'CoreShowChannel') {
+    (session.batch ||= []).push(headers);
+    return;
+  }
+  if (headers.Event === 'CoreShowChannelsComplete') {
+    const batch = session.batch || [];
+    session.batch = null;
+    const extensions = extensionNumbers();
+    amiState.channels = batch.map((channel) => amiChannel(channel, extensions));
+    amiState.lastPoll = new Date().toISOString();
+    return;
+  }
+  if (headers.Event === 'Cdr') {
+    amiRecordCdr(headers);
+    return;
+  }
+  if (headers.Response && !session.loggedIn) {
+    if (/^success$/i.test(headers.Response)) {
+      session.loggedIn = true;
+      amiState = { ...amiState, connected: true, lastError: null, lastPoll: new Date().toISOString(), channels: [] };
+      session.poll = setInterval(() => amiPoll(session), 4000);
+      amiPoll(session);
+      return;
+    }
+    session.loginError = headers.Message || 'AMI login refused';
+    return;
+  }
+  if (headers.Response && /^error$/i.test(headers.Response)) {
+    amiState = { ...amiState, lastError: headers.Message || 'AMI action failed' };
+  }
+}
+
+function amiPoll(session) {
+  if (!session.loggedIn || session.pending) return;
+  if (!session.socket || session.socket.destroyed) return;
+  session.pending = true;
+  session.batch = null;
+  session.socket.write('Action: CoreShowChannels\r\nActionID: console-poll\r\n\r\n');
+}
+
+function amiConnect() {
+  if (!amiConfigured()) {
+    amiState = { connected: false, lastError: null, lastPoll: new Date().toISOString(), info: {}, channels: [], simulated: true };
+    return;
+  }
+  if (amiSession) return;
+  const { host, port, user, secret } = amiTarget();
+  const session = { socket: null, buffer: '', loggedIn: false, closed: false, poll: null, loginError: null };
+  amiSession = session;
+  const socket = net.createConnection({ host, port });
+  session.socket = socket;
+
+  const fail = (message) => {
+    if (session.closed) return;
+    session.closed = true;
+    amiClose(message);
+  };
+
+  socket.setTimeout(8000, () => fail('AMI timeout'));
+  socket.on('error', (err) => fail(err.message));
+  socket.on('close', () => fail(session.loginError || amiState.lastError || 'AMI connection closed'));
+  socket.on('connect', () => {
+    socket.setTimeout(0);
+    socket.write(`Action: Login\r\nUsername: ${user}\r\nSecret: ${secret}\r\nEvents: on\r\n\r\n`);
+  });
+  socket.on('data', (chunk) => {
+    session.buffer += chunk.toString('utf8');
+    let idx;
+    while ((idx = session.buffer.indexOf('\r\n\r\n')) >= 0) {
+      const block = session.buffer.slice(0, idx);
+      session.buffer = session.buffer.slice(idx + 4);
+      if (!block.trim()) continue;
+      const headers = {};
+      for (const line of block.split('\r\n')) {
+        const colon = line.indexOf(':');
+        if (colon <= 0) continue;
+        headers[line.slice(0, colon).trim()] = line.slice(colon + 1).trim();
+      }
+      if (session.pending && (headers.Event === 'CoreShowChannelsComplete'
+        || (headers.Response && headers.ActionID === 'console-poll'))) {
+        session.pending = false;
+      }
+      amiDispatch(session, headers);
+    }
+  });
+}
+
+/** Start (or keep) the AMI session. Safe to call on a timer. */
+export function startAmi() {
   if (!amiConfigured()) {
     amiState = { connected: false, lastError: null, lastPoll: new Date().toISOString(), info: {}, channels: [], simulated: true };
     return amiState;
   }
-  const res = await amiAction('CoreStatus');
-  if (res.error) {
-    amiState = { ...amiState, connected: false, lastError: res.error, lastPoll: new Date().toISOString(), simulated: false };
-    return amiState;
-  }
-  const info = {};
-  for (const line of String(res.raw || '').split('\r\n')) {
-    const idx = line.indexOf(':');
-    if (idx > 0) info[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
-  }
-  amiState = {
-    connected: true,
-    lastError: null,
-    lastPoll: new Date().toISOString(),
-    info,
-    channels: amiState.channels,
-    simulated: false
-  };
+  amiConnect();
   return amiState;
 }
 

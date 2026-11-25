@@ -153,6 +153,12 @@ ADMIN_PASSWORD='a-long-password' docker compose up -d
   parking, DISA, feature codes, contacts, music classes and call history.
 - `SIMULATE_CALLS=1` (off by default) animates live channel activity on the dashboard for a demo
   instance with no AMI feed. Simulated calls are never written to the CDR table.
+- Point the console at Asterisk's AMI and the demo data gives way to the real thing: with
+  `ami_host` / `ami_port` / `ami_user` / `ami_secret` set (Settings → Asterisk), the console keeps one
+  AMI session open, `CoreShowChannels` feeds the live channel list and `cdr_manager`'s `Cdr` events
+  are stored as call records. The AMI user needs read classes
+  `system,call,log,verbose,agent,user,config,reporting,cdr,dialplan` and write class `command` (for
+  the hold-music reload), and `manager.conf` must bind beyond `127.0.0.1` with that address permitted.
 - Data lives in one SQLite file on the `/data` volume (WAL mode).
 - No native modules, no build toolchain, no Redis, no MariaDB, no PHP-FPM.
 - `HEALTHCHECK` hits `/api/health`; `SESSION_SECRET` makes sessions survive restarts.
@@ -253,16 +259,17 @@ entries, SSE ticks, SPA shell + deep-link routing and asset content types.
 The Docker image was built and run as a non-root container against a fresh volume, and the browser
 UI was exercised for sign-in, dashboard, the extension list and the create-extension form.
 
-**Not verified:** the AMI client against a real Asterisk (no instance available — the dashboard
-clearly labels simulated telemetry vs. connected AMI), and the UI was not clicked through page by
-page.
+**Verified against a real PBX:** with a FreePBX/Asterisk 22 AMI link configured, the console logs
+in over its persistent session, lists live channels from `CoreShowChannels`, and stores the
+`cdr_manager` records Asterisk emits at hangup. The UI was not clicked through page by page.
 
 ## Limitations
 
 - Asterisk is not bundled: this container manages configuration and state; point
   `ast_config_dir` at a shared volume (or mount it) and reload Asterisk after applying.
 - Demo call history is seeded once by `SEED_DEMO`, and live channel activity can be animated with
-  `SIMULATE_CALLS=1`; neither writes simulated calls into `cdr` after boot. Real CDRs come from
-  your CDR database or an AMI/ARI feed; the schema is already in place.
+  `SIMULATE_CALLS=1`; neither writes simulated calls into `cdr` after boot. Real CDRs arrive over
+  AMI from `cdr_manager`, which is enabled by default in FreePBX; records are de-duplicated on
+  `uniqueid`, so a CDR Asterisk finalizes twice is stored once with its final duration.
 - FreePBX `.conf` imports, commercial modules (endpoint manager, fax pro, etc.) and PHP hook
   modules are out of scope by design.

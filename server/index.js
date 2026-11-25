@@ -22,7 +22,7 @@ import {
   recordFailure, clearFailures, tokenFromRequest
 } from './auth.js';
 import {
-  generateConfigs, testDialplan, hostStats, refreshAmi, getAmiState, amiConfigured, reloadMusicOnHold
+  generateConfigs, testDialplan, hostStats, startAmi, getAmiState, amiConfigured, reloadMusicOnHold
 } from './asterisk.js';
 import {
   aiInfo, aiConfigured, buildRecording, buildJingle, transcribe, saveMedia, mediaPath, slugify,
@@ -843,7 +843,7 @@ function dashboardPayload() {
       missedToday: missed,
       answerRate: totalToday ? Math.round((answered / totalToday) * 100) : 0,
       avgTalkSeconds: Math.round(Number(db.prepare("SELECT AVG(billsec) AS a FROM cdr WHERE disposition='ANSWERED'").get().a || 0)),
-      activeCalls: 0
+      activeCalls: getAmiState().connected ? getAmiState().channels.length : 0
     },
     hourly,
     trend,
@@ -907,16 +907,20 @@ function simulateCalls() {
 }
 
 function broadcast() {
+  const ami = getAmiState();
+  // With AMI connected the channel list is what Asterisk reports. The simulator
+  // is only a fallback for an instance with no PBX to talk to.
+  const calls = ami.connected ? ami.channels : [...activeCalls.values()];
   const payload = JSON.stringify({
     type: 'tick',
     at: new Date().toISOString(),
     system: hostStats(),
-    ami: getAmiState(),
-    calls: [...activeCalls.values()],
+    ami,
+    calls,
     counters: {
-      active: activeCalls.size,
-      waiting: [...activeCalls.values()].filter((c) => c.state === 'waiting').length,
-      talking: [...activeCalls.values()].filter((c) => c.state === 'talking').length
+      active: calls.length,
+      waiting: calls.filter((c) => c.state === 'waiting').length,
+      talking: calls.filter((c) => c.state === 'talking').length
     }
   });
   for (const client of sseClients) {
@@ -935,15 +939,16 @@ app.get('/api/events', (req, res) => {
 });
 
 setInterval(() => {
+  // Keeps the AMI session alive (and retries while the PBX is unreachable).
+  startAmi();
   if (!sseClients.size) return;
-  // Only model channel activity when it is switched on, and only while someone
-  // is watching; an idle or default instance never invents calls.
-  if (SIMULATE_CALLS) simulateCalls();
+  // Only model channel activity when it is switched on, only while someone is
+  // watching, and never while Asterisk is actually reporting channels.
+  if (SIMULATE_CALLS && !getAmiState().connected) simulateCalls();
   broadcast();
 }, 4000);
 
-setInterval(() => { refreshAmi().catch(() => {}); }, 15000);
-refreshAmi().catch(() => {});
+startAmi();
 
 // ---------------------------------------------------------------------------
 // Static SPA
