@@ -25,7 +25,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getSetting, setSetting } from './db.js';
-import { testAmiConnection } from './asterisk.js';
+import { testAmiConnection, restartAmi } from './asterisk.js';
 
 const DATA_DIR = process.env.DATA_DIR || '/data';
 
@@ -458,6 +458,11 @@ export function startEngineInstall(version) {
       setSetting('pbx_engine_version', chosen.id);
 
       if (!ami.ok) throw new Error(`Asterisk started but AMI did not answer: ${ami.error}`);
+
+      // The AMI client is still holding the socket it opened for the previous
+      // settings.  Without this the wizard reports a signed-in engine while the
+      // console keeps talking to whatever host it was pointed at before.
+      restartAmi();
 
       installState = {
         phase: 'done',
