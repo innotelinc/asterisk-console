@@ -159,6 +159,8 @@ ADMIN_PASSWORD='a-long-password' docker compose up -d
   events are stored as call records. The AMI user needs read classes
   `system,call,log,verbose,agent,user,config,reporting,cdr,dialplan` and write class `command` (for
   the hold-music reload), and `manager.conf` must bind beyond `127.0.0.1` with that address permitted.
+  Reach the AMI address from this container: either join the PBX's Docker network and use its container
+  alias (for example `ami_host=freepbx`), or publish 5038 on the host and use the host address.
 - Data lives in one SQLite file on the `/data` volume (WAL mode).
 - No native modules, no build toolchain, no Redis, no MariaDB, no PHP-FPM.
 - `HEALTHCHECK` hits `/api/health`; `SESSION_SECRET` makes sessions survive restarts.
