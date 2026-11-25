@@ -46,7 +46,18 @@ docker run -d --name asterisk-console -p 8080:8080 \
   asterisk-console
 ```
 
-Without the socket the wizard prints the exact `docker run` — and an equivalent compose file — for
+Where a platform refuses both the bind mount and `--group-add` (Coolify's API does), run a socket
+proxy on the console's own network and point the console at it — no host socket in the web app:
+
+```sh
+docker run -d --name docker-socket-proxy --restart unless-stopped --network coolify \
+  -e CONTAINERS=1 -e IMAGES=1 -e NETWORKS=1 -e POST=1 -e INFO=1 -e VERSION=1 -e PING=1 \
+  -e ALLOW_START=1 -e ALLOW_STOP=1 -e ALLOW_RESTARTS=1 -e EXEC=0 -e VOLUMES=0 \
+  -v /var/run/docker.sock:/var/run/docker.sock:ro tecnativa/docker-socket-proxy:latest
+docker run -d ... -e DOCKER_HOST=tcp://docker-socket-proxy:2375 asterisk-console
+```
+
+Without a Docker endpoint the wizard prints the exact `docker run` — and an equivalent compose file — for
 the chosen version. Both mount `PBX_DIR`, the host path of this console's data directory, and the
 AMI account plus base configuration are written before the command is shown, so the Asterisk it
 starts is usable as-is: fill in the host, press *Test connection*, and continue.

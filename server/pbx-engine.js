@@ -59,7 +59,28 @@ function socketPath() {
   return raw.startsWith('unix://') ? raw.slice('unix://'.length) : raw;
 }
 
+/**
+ * Where the Docker Engine API is, as something http.request accepts.
+ *
+ * A mounted socket is the direct case. `DOCKER_HOST=tcp://host:port` covers a
+ * host that cannot bind-mount its socket into this container (Coolify's API
+ * refuses bind mounts, for one) and runs a socket proxy instead.
+ */
+function dockerTarget() {
+  const host = String(process.env.DOCKER_HOST || '');
+  const match = /^tcp:\/\/([^:/]+):(\d+)$/.exec(host);
+  if (match) return { host: match[1], port: Number(match[2]) };
+  return { socketPath: socketPath() };
+}
+
+/** A short label for the endpoint, for messages and status. */
+export function dockerEndpointLabel() {
+  const target = dockerTarget();
+  return target.socketPath ? target.socketPath : `tcp://${target.host}:${target.port}`;
+}
+
 export function dockerAvailable() {
+  if (dockerTarget().host) return true; // a TCP endpoint is only proven by a call
   try {
     return existsSync(socketPath());
   } catch {
@@ -73,7 +94,7 @@ function docker(method, path, { body, timeout = 30000 } = {}) {
     const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
     const req = http.request(
       {
-        socketPath: socketPath(),
+        ...dockerTarget(),
         path,
         method,
         headers: {
@@ -108,7 +129,7 @@ function pullImage(image, tag, onProgress) {
   return new Promise((resolve, reject) => {
     const req = http.request(
       {
-        socketPath: socketPath(),
+        ...dockerTarget(),
         path: `/images/create?fromImage=${encodeURIComponent(image)}&tag=${encodeURIComponent(tag)}`,
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -367,7 +388,7 @@ export function startEngineInstall(version) {
     return {
       started: false,
       needsDocker: true,
-      error: `No Docker socket at ${socketPath()}. Run the generated command on the host, or mount the socket into the console.`
+      error: `No Docker endpoint at ${dockerEndpointLabel()}. Run the generated command on the host, or give the console a Docker socket or proxy.`
     };
   }
 
@@ -463,7 +484,7 @@ export function startEngineInstall(version) {
 export async function engineStatus() {
   const cfg = settingsForEngine();
   const status = {
-    docker: { available: dockerAvailable(), socket: socketPath(), error: null },
+    docker: { available: dockerAvailable(), socket: dockerEndpointLabel(), error: null },
     versions: ENGINE_VERSIONS,
     installed: null,
     install: installState,
@@ -476,7 +497,7 @@ export async function engineStatus() {
     }
   };
   if (!status.docker.available) {
-    status.docker.error = `No Docker socket at ${socketPath()}: the wizard can print the install command, but not run it.`;
+    status.docker.error = `No Docker endpoint at ${dockerEndpointLabel()}: the wizard can print the install command, but not run it.`;
     return status;
   }
   try {
