@@ -1,0 +1,77 @@
+# Telno on 192.168.1.53 — built from branch `archive/local-main-2026-10-29`.
+#
+# This is the branch that was reviewed and chosen, not `main`. The image
+# compiles Asterisk 22 from source with its own pjproject (PJSIP_MAX_PKT_LEN
+# raised to 65535, so a browser INVITE with video does not overflow), then runs
+# the switch and the Fastify API under supervisor as uid 999.
+#
+#   docker compose -f docker-compose.53.yml build     # 30-60 min: builds Asterisk
+#   docker compose -f docker-compose.53.yml up -d
+#
+# Host networking is deliberate: the web port, SIP, RTP and AMI land on the
+# host's own stack, so a reverse proxy reaches the app over a plain socket and
+# no SDP address has to be rewritten through Docker's NAT. That also means the
+# ports below cannot be published or remapped — they are the process's own
+# listeners, and only one process on .53 may own each of them.
+
+name: telno
+
+services:
+  telno:
+    build:
+      context: ${TELNO_SRC:-/opt/telno}
+      dockerfile: Dockerfile
+      args:
+        # Point these at a mirror when Docker Hub is rate-limited or blocked.
+        NODE_IMAGE: ${NODE_IMAGE:-node:24-bookworm-slim}
+        SWITCH_IMAGE: ${SWITCH_IMAGE:-debian:bookworm}
+        # The branch defaults to 22-current; pin a release for a reproducible build.
+        ASTERISK_VERSION: ${ASTERISK_VERSION:-22-current}
+
+    image: telno:${TELNO_TAG:-archive-2026-10-29}
+    container_name: telno
+    restart: unless-stopped
+
+    # A readable hostname on purpose: Docker's default is a hex container id,
+    # and a SIP parser reads a digit-leading host as a broken IPv4 address.
+    hostname: ${TELNO_HOSTNAME:-telno}
+
+    network_mode: host
+
+    env_file:
+      - .env
+
+    environment:
+      # The process's own listener. 8081 while the old app still holds 8080.
+      # Deliberately not called PORT in .env: an ambient PORT in the host's
+      # environment would silently win over the file and move the listener.
+      PORT: ${TELNO_PORT:-8080}
+      HOST: 0.0.0.0
+      NODE_ENV: production
+      DATA_DIR: /data
+      ASTERISK_CONFIG_DIR: /etc/asterisk
+      LOG_LEVEL: ${LOG_LEVEL:-warn}
+
+    volumes:
+      - telno-data:/data                 # database, secrets, recordings, backups
+      - telno-asterisk:/etc/asterisk     # generated switch configuration
+      - telno-spool:/var/spool/asterisk  # voicemail and fax spool
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${TELNO_PORT:-8080}/api/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 25s
+
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+
+volumes:
+  telno-data:
+  telno-asterisk:
+  telno-spool:
