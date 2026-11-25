@@ -54,6 +54,21 @@ export function engineVersion(id) {
   return ENGINE_VERSIONS.find((v) => v.id === String(id)) || null;
 }
 
+/**
+ * The Asterisk version a container was started from, read off its image
+ * reference: `andrius/asterisk:23` → 23, `andrius/asterisk:24-rc` → 24,
+ * `asterisk-console/asterisk:22.12.0` → 22.12.0. Containers started from the
+ * printed `docker run` carry no label, so this is the only version they have;
+ * an image with a symbolic tag (`stable`, `latest`) or a bare image id yields
+ * an empty string rather than a guess.
+ */
+export function versionFromImage(ref) {
+  const image = String(ref || '').split('@')[0];
+  const tag = image.includes(':') ? image.slice(image.lastIndexOf(':') + 1) : '';
+  const match = /^(\d+(?:\.\d+)*)/.exec(tag);
+  return match ? match[1] : '';
+}
+
 /** The tag a source build of this line produces. */
 export function engineSourceImage(chosen) {
   return `asterisk-console/asterisk:${chosen.release}`;
@@ -547,9 +562,16 @@ export async function engineStatus() {
   try {
     const container = await findContainer();
     if (container) {
+      // The label names the line the console installed. A container started by
+      // hand has none, so fall back to its image tag and then to the version
+      // recorded at install time — an operator who installed 23 before the
+      // picker narrowed to 20/22/24 still sees 23, not a bare "Asterisk".
+      const labelled = container.Labels?.[ENGINE_LABEL]
+        || container.Labels?.['com.asterisk-console.version']
+        || '';
       status.installed = {
         id: container.Id.slice(0, 12),
-        version: container.Labels?.[ENGINE_LABEL] || '',
+        version: labelled || versionFromImage(container.Image) || status.settings.engine_version,
         image: container.Image,
         running: container.State === 'running',
         status: container.Status || container.State || '',
