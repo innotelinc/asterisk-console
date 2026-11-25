@@ -19,6 +19,38 @@ Once the administrator exists the setup wizard opens: name the PBX, optionally l
 AMI, and create the first extension. Nothing is seeded, so an install that skips the wizard is
 simply empty rather than full of sample extensions.
 
+### Letting the wizard install Asterisk
+
+The Asterisk step offers two paths: connect to a PBX you already run, or install one. The install
+path picks an Asterisk line — **22 LTS** (recommended), **20 LTS**, **23**, or the **24 LTS** release
+candidate, each with its upstream security-support date — and starts one container from
+`andrius/asterisk:<version>`:
+
+- `/etc/asterisk` is this console's own `<data>/pbx` directory, so *apply to disk* writes the files
+  the running Asterisk reads;
+- the AMI account is generated (user `console`, random secret) and restricted to private address
+  ranges;
+- the container joins the console's Docker network as `asterisk`, so AMI is reached by alias and no
+  AMI port is published;
+- SIP and the RTP range are published one-to-one on `pbx_sip_port` and `pbx_rtp_start..end`
+  (Settings → Asterisk), matching the transport and `rtp.conf` the console generates.
+
+Reinstalling keeps the configuration files and the AMI secret. Installing needs the Docker socket,
+which is host-root-equivalent access, so it is opt-in:
+
+```sh
+docker run -d --name asterisk-console -p 8080:8080 \
+  -v pbx-data:/data \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  --group-add "$(stat -c %g /var/run/docker.sock)" \
+  asterisk-console
+```
+
+Without the socket the wizard prints the exact `docker run` — and an equivalent compose file — for
+the chosen version. Both mount `PBX_DIR`, the host path of this console's data directory, and the
+AMI account plus base configuration are written before the command is shown, so the Asterisk it
+starts is usable as-is: fill in the host, press *Test connection*, and continue.
+
 ---
 
 ## What was observed
@@ -154,8 +186,10 @@ ADMIN_PASSWORD='a-long-password' docker compose up -d
   error before the server listens.
 - A fresh install starts empty: no sample extensions, trunks or call records. The setup wizard,
   shown once the administrator exists and re-runnable from Settings, names the PBX, optionally
-  links Asterisk over AMI (testing the credentials before saving them) and creates the first
-  extension.
+  links Asterisk over AMI (testing the credentials before saving them) or installs a chosen
+  Asterisk version, and creates the first extension.
+- Generated configuration now includes a PJSIP UDP transport and `rtp.conf`, so the files it writes
+  bind a real SIP socket instead of leaving endpoints with nothing to register to.
 - Point the console at Asterisk's AMI and the real thing takes over: with
   `ami_host` / `ami_port` / `ami_user` / `ami_secret` set (Settings → Asterisk), the console keeps one
   AMI session open, Asterisk's channel events feed the live channel list and `cdr_manager`'s `Cdr`

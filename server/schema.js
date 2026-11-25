@@ -586,7 +586,11 @@ export const SETTINGS_GROUPS = [
       { key: 'ami_port', label: 'AMI port', type: 'number', default: 5038 },
       { key: 'ami_user', label: 'AMI user', type: 'text', default: '' },
       { key: 'ami_secret', label: 'AMI secret', type: 'password', default: '' },
-      { key: 'ast_config_dir', label: 'Config output directory', type: 'text', default: '/etc/asterisk' }
+      { key: 'ast_config_dir', label: 'Config output directory', type: 'text', default: '/etc/asterisk' },
+      { key: 'pbx_sip_port', label: 'SIP port', type: 'number', default: 5060 },
+      { key: 'pbx_external_address', label: 'Public address for NAT', type: 'text', default: '', help: 'Set when phones or trunks reach this PBX across NAT; empty means no external address is written.' },
+      { key: 'pbx_rtp_start', label: 'RTP start port', type: 'number', default: 10000 },
+      { key: 'pbx_rtp_end', label: 'RTP end port', type: 'number', default: 10199 }
     ]
   },
   {

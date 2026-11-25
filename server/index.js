@@ -26,6 +26,10 @@ import {
   reloadMusicOnHold, testAmiConnection
 } from './asterisk.js';
 import {
+  engineStatus, startEngineInstall, engineCommand, engineCompose, engineVersion,
+  prepareEngineConfig, ENGINE_VERSIONS, ENGINE_CONTAINER
+} from './pbx-engine.js';
+import {
   aiInfo, aiConfigured, buildRecording, buildJingle, transcribe, saveMedia, mediaPath, slugify,
   jingleDir, migrateJingleAudio, removeJingleAudio, removeRecordingFile, replaceClassAudio,
   saveClassAudio, ensureMusicAudio, recordingAudioPath, classAudioFile, hasReadableAudio,
@@ -581,6 +585,41 @@ app.post('/api/setup/ami-test', requireRole('admin'), async (req, res) => {
     secret: String(secret || '')
   });
   res.json(result);
+});
+
+// ---------------------------------------------------------------------------
+// Asterisk engine: install a PBX of the chosen version, or hand the operator
+// the exact command when this console has no Docker socket to install with.
+// ---------------------------------------------------------------------------
+app.get('/api/setup/engine', requireRole('admin'), async (req, res, next) => {
+  try {
+    res.json(await engineStatus());
+  } catch (err) { next(err); }
+});
+
+app.post('/api/setup/engine/install', requireRole('admin'), (req, res) => {
+  const version = String(req.body?.version || '');
+  const result = startEngineInstall(version);
+  if (!result.started) {
+    return res.status(result.needsDocker ? 409 : 400).json({
+      ...result,
+      versions: ENGINE_VERSIONS,
+      command: engineVersion(version) ? engineCommand(version) : null,
+      compose: engineVersion(version) ? engineCompose(version) : null
+    });
+  }
+  audit({ actor: req.session.username, action: 'engine_install', entity: 'settings', detail: { version, container: ENGINE_CONTAINER }, ip: req.ip });
+  res.status(202).json(result);
+});
+
+app.get('/api/setup/engine/command', requireRole('admin'), (req, res) => {
+  const version = String(req.query.version || '');
+  if (!engineVersion(version)) return res.status(400).json({ error: `Unknown Asterisk version "${version}"` });
+  // The command mounts this console's configuration directory, so write the AMI
+  // account and the base files first: the Asterisk it starts is then usable.
+  const written = prepareEngineConfig();
+  audit({ actor: req.session.username, action: 'engine_command', entity: 'settings', detail: { version, written }, ip: req.ip });
+  res.json({ version, command: engineCommand(version), compose: engineCompose(version) });
 });
 
 app.post('/api/setup/complete', requireRole('admin'), (req, res) => {

@@ -12,6 +12,18 @@ export type SetupState = {
     ast_config_dir: string;
   };
 };
+/** An Asterisk line the console can install, with its upstream support date. */
+export type EngineVersion = { id: string; label: string; image: string; support: string; recommended?: boolean };
+/** Docker reachability, the engine container if one exists, and install progress. */
+export type EngineState = {
+  docker: { available: boolean; socket: string; error: string | null };
+  versions: EngineVersion[];
+  installed: { id: string; version: string; image: string; running: boolean; status: string; startedAt: string | null } | null;
+  install: { phase: 'idle' | 'pulling' | 'configuring' | 'starting' | 'waiting' | 'done' | 'error'; message: string; error: string | null; startedAt: string | null; finishedAt: string | null };
+  settings: { ami_host: string; ami_port: string; ami_user: string; ast_config_dir: string; engine_version: string };
+};
+/** The paste-on-the-host install for a version, when the console has no socket. */
+export type EngineCommand = { version: string; command: string; compose: string };
 /** Whether Asterisk was told to re-read its music-on-hold classes, and why not. */
 export type MohReload = { reloaded: boolean; reason: string };
 export type Field = {
@@ -83,6 +95,12 @@ export const api = {
     request<{ ok: boolean }>('/api/setup/complete', { method: 'POST', body }),
   testAmi: (body: { host: string; port: number | string; user: string; secret: string }) =>
     request<{ ok: boolean; error?: string }>('/api/setup/ami-test', { method: 'POST', body }),
+  engineState: () => request<EngineState>('/api/setup/engine'),
+  installEngine: (version: string) =>
+    request<{ started: boolean; alreadyRunning?: boolean; needsDocker?: boolean; error?: string; command?: string; compose?: string }>(
+      '/api/setup/engine/install', { method: 'POST', body: { version } }
+    ),
+  engineCommand: (version: string) => request<EngineCommand>(`/api/setup/engine/command?version=${encodeURIComponent(version)}`),
 
   meta: () => request<Meta>('/api/meta'),
   list: (entity: string, query: Record<string, any> = {}) => {

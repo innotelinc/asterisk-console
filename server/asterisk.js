@@ -110,6 +110,18 @@ export function generateConfigs() {
   // ---------------------------------------------------------------- pjsip.conf
   let pjsip = HEADER('pjsip.conf');
   pjsip += '; Generated from Extensions and Trunks\n\n[global]\ntype=global\nendpoint_identifier_order=ip,username,anonymous\n\n';
+  // Endpoints are useless without a transport: without this block a real
+  // Asterisk never binds a SIP socket, so the console writes one for it. The
+  // external address is only written when the operator set one, because a
+  // wrong value there breaks local phones.
+  const sipPort = getSetting('pbx_sip_port', '5060') || '5060';
+  const externalAddress = getSetting('pbx_external_address', '');
+  pjsip += `[transport-udp]\ntype=transport\nprotocol=udp\nbind=0.0.0.0:${sipPort}\n`;
+  if (externalAddress) {
+    pjsip += `external_media_address=${externalAddress}\nexternal_signaling_address=${externalAddress}\n`;
+    pjsip += 'local_net=10.0.0.0/8\nlocal_net=172.16.0.0/12\nlocal_net=192.168.0.0/16\n';
+  }
+  pjsip += '\n';
   for (const ext of data.extensions) {
     if (ext.tech !== 'pjsip') continue;
     const secret = ext.secret || `auto-${ext.extension}`;
@@ -147,6 +159,15 @@ export function generateConfigs() {
     }
   }
   files.push({ name: 'pjsip.conf', content: pjsip, module: 'Connectivity' });
+
+  // ---------------------------------------------------------------- rtp.conf
+  const rtpStart = Number(getSetting('pbx_rtp_start', '10000')) || 10000;
+  const rtpEnd = Number(getSetting('pbx_rtp_end', '10199')) || 10199;
+  files.push({
+    name: 'rtp.conf',
+    content: HEADER('rtp.conf') + `[general]\nrtpstart=${rtpStart}\nrtpend=${rtpEnd}\n`,
+    module: 'Settings'
+  });
 
   // ----------------------------------------------------------- extensions.conf
   let ext = HEADER('extensions.conf');

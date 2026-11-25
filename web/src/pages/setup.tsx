@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { api, type SetupState } from '../lib/api';
+import { api, type EngineCommand, type EngineState, type SetupState } from '../lib/api';
 import { Icon, Spinner, useToast } from '../lib/ui';
 
 /**
@@ -61,6 +61,183 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
   );
 }
 
+/**
+ * Install Asterisk from the wizard, or print the install for a host the console
+ * cannot reach. Progress is polled: the first image pull outlives a request.
+ */
+function EngineInstaller({ onInstalled }: { onInstalled: (values: { host: string; port: string; user: string }) => void }) {
+  const [engine, setEngine] = useState<EngineState | null>(null);
+  const [version, setVersion] = useState('22');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [fallback, setFallback] = useState<EngineCommand | null>(null);
+  const [copied, setCopied] = useState('');
+
+  const load = async () => {
+    try {
+      const next = await api.engineState();
+      setEngine(next);
+      if (next.install.phase === 'done' && next.settings.ami_host) {
+        onInstalled({ host: next.settings.ami_host, port: next.settings.ami_port || '5038', user: next.settings.ami_user });
+      }
+    } catch (err: any) {
+      setError(err.message || 'Could not read the Asterisk install state');
+    }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const running = Boolean(engine && ['pulling', 'configuring', 'starting', 'waiting'].includes(engine.install.phase));
+  useEffect(() => {
+    if (!running) return;
+    const timer = setInterval(load, 2000);
+    return () => clearInterval(timer);
+  }, [running]);
+
+  const install = async () => {
+    setError('');
+    setFallback(null);
+    setBusy(true);
+    try {
+      if (engine && !engine.docker.available) {
+        setFallback(await api.engineCommand(version));
+        return;
+      }
+      await api.installEngine(version);
+      await load();
+    } catch (err: any) {
+      setError(err.message || 'The install could not start');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const copy = async (text: string, which: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(which);
+      setTimeout(() => setCopied(''), 1500);
+    } catch {
+      setError('The clipboard is not available here — select the text and copy it.');
+    }
+  };
+
+  const chosen = engine?.versions.find((v) => v.id === version);
+
+  return (
+    <div style={{ display: 'grid', gap: 12 }}>
+      <div className="alert info">
+        <Icon name="Download" size={15} />
+        <div>
+          The console can install Asterisk itself: it pulls the image for the version you pick, writes the AMI
+          account and a base configuration, and starts one container. Nothing else on the host is touched.
+        </div>
+      </div>
+
+      {error && (
+        <div className="alert error">
+          <Icon name="CircleX" size={15} />
+          <div>{error}</div>
+        </div>
+      )}
+
+      <div className="form-grid">
+        <Field
+          label="Asterisk version"
+          hint={chosen ? `Security support until ${chosen.support}. Image ${chosen.image}.` : undefined}
+        >
+          <select className="input" value={version} onChange={(e) => setVersion(e.target.value)} disabled={running}>
+            {(engine?.versions || []).map((v) => (
+              <option key={v.id} value={v.id}>{v.label}{v.recommended ? ' — recommended' : ''}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Install" hint="Reinstalling keeps the configuration files and the AMI secret.">
+          <button className="btn primary" type="button" onClick={install} disabled={busy || running || !engine}>
+            {busy || running
+              ? <span className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} />
+              : <Icon name="Download" size={15} />}
+            {engine?.installed ? 'Reinstall this version' : 'Install Asterisk'}
+          </button>
+        </Field>
+      </div>
+
+      {engine && engine.docker.available && engine.docker.error && (
+        <div className="alert error">
+          <Icon name="CircleX" size={15} />
+          <div>Docker did not answer on {engine.docker.socket}: {engine.docker.error}</div>
+        </div>
+      )}
+
+      {engine && !engine.docker.available && (
+        <div className="alert info">
+          <Icon name="Info" size={15} />
+          <div>
+            This console has no Docker socket at <span className="mono">{engine.docker.socket}</span>, so it cannot
+            start the container itself. Pick a version and press Install to get the exact command for the host.
+          </div>
+        </div>
+      )}
+
+      {running && (
+        <div className="alert info">
+          <span className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} />
+          <div>{engine?.install.message || 'Installing…'}</div>
+        </div>
+      )}
+
+      {!running && engine?.install.phase === 'error' && (
+        <div className="alert error">
+          <Icon name="CircleX" size={15} />
+          <div>{engine.install.error}</div>
+        </div>
+      )}
+
+      {engine?.installed && (
+        <div className="alert info">
+          <Icon name="CircleCheck" size={15} />
+          <div>
+            {engine.installed.image} is {engine.installed.running ? 'running' : 'stopped'} ({engine.installed.status}).
+            AMI is reachable at <span className="mono">{engine.settings.ami_host}:{engine.settings.ami_port}</span>.
+          </div>
+        </div>
+      )}
+
+      {fallback && (
+        <div style={{ display: 'grid', gap: 8 }}>
+          <div className="row" style={{ justifyContent: 'space-between' }}>
+            <strong style={{ fontSize: 12.5 }}>Run this on the Docker host</strong>
+            <button className="btn" type="button" onClick={() => copy(fallback.command, 'command')}>
+              <Icon name={copied === 'command' ? 'Check' : 'Copy'} size={14} />
+              {copied === 'command' ? 'Copied' : 'Copy command'}
+            </button>
+          </div>
+          <pre className="mono" style={{ margin: 0, padding: 12, background: 'var(--bg-inset, #0f172a)', color: 'var(--text)', borderRadius: 8, overflowX: 'auto', fontSize: 11.5, lineHeight: 1.6 }}>
+            {fallback.command}
+          </pre>
+          <details>
+            <summary className="tiny muted" style={{ cursor: 'pointer' }}>Or the same install as a compose file</summary>
+            <div className="row" style={{ justifyContent: 'flex-end', marginTop: 6 }}>
+              <button className="btn" type="button" onClick={() => copy(fallback.compose, 'compose')}>
+                <Icon name={copied === 'compose' ? 'Check' : 'Copy'} size={14} />
+                {copied === 'compose' ? 'Copied' : 'Copy compose'}
+              </button>
+            </div>
+            <pre className="mono" style={{ margin: 0, padding: 12, background: 'var(--bg-inset, #0f172a)', color: 'var(--text)', borderRadius: 8, overflowX: 'auto', fontSize: 11.5, lineHeight: 1.6 }}>
+              {fallback.compose}
+            </pre>
+          </details>
+          <div className="tiny faint">
+            The AMI account and base configuration are already written to this console's pbx directory, so point
+            PBX_DIR at that directory on the host and the started Asterisk is usable as-is. Once it is up, fill in
+            the host below and press Test connection.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function SetupPage({ onDone, onSkip }: { onDone: () => void; onSkip: () => void }) {
   const [step, setStep] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -78,6 +255,7 @@ export default function SetupPage({ onDone, onSkip }: { onDone: () => void; onSk
   const [ext, setExt] = useState({ extension: '', name: '', secret: randomSecret() });
   const [createdExt, setCreatedExt] = useState<string | null>(null);
   const [amiTest, setAmiTest] = useState<{ state: 'idle' | 'busy' | 'ok' | 'fail'; message?: string }>({ state: 'idle' });
+  const [amiMode, setAmiMode] = useState<'external' | 'install'>('external');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const { push } = useToast();
@@ -270,7 +448,32 @@ export default function SetupPage({ onDone, onSkip }: { onDone: () => void; onSk
             )}
 
             {step === 1 && (
-              <div className="form-grid">
+              <div style={{ display: 'grid', gap: 14 }}>
+                <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                  <button
+                    className={`btn ${amiMode === 'external' ? 'primary' : ''}`}
+                    type="button"
+                    onClick={() => setAmiMode('external')}
+                  >
+                    <Icon name="Server" size={15} /> Connect to an existing PBX
+                  </button>
+                  <button
+                    className={`btn ${amiMode === 'install' ? 'primary' : ''}`}
+                    type="button"
+                    onClick={() => setAmiMode('install')}
+                  >
+                    <Icon name="Download" size={15} /> Install Asterisk
+                  </button>
+                </div>
+                {amiMode === 'install' && (
+                  <EngineInstaller
+                    onInstalled={(values) => {
+                      set({ ami_host: values.host, ami_port: values.port, ami_user: values.user });
+                      setAmiTest({ state: 'idle' });
+                    }}
+                  />
+                )}
+                <div className="form-grid">
                 <Field label="AMI host" hint="Hostname or IP of the PBX. Leave empty to stay offline.">
                   <input
                     className="input"
@@ -330,6 +533,7 @@ export default function SetupPage({ onDone, onSkip }: { onDone: () => void; onSk
                     The test signs in and asks for the core status without saving anything. You can finish setup
                     without AMI and add it later in Settings → Asterisk.
                   </div>
+                </div>
                 </div>
               </div>
             )}
