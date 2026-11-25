@@ -144,15 +144,32 @@ export function Toggle({ checked, onChange, label }: { checked: boolean; onChang
   );
 }
 
+const DESTINATION_LABELS: Record<string, string> = {
+  extension: 'Extensions',
+  ring_group: 'Ring groups',
+  queue: 'Queues',
+  ivr: 'IVR menus',
+  time_condition: 'Time conditions',
+  announcement: 'Announcements',
+  voicemail: 'Voicemail boxes',
+  conference: 'Conferences',
+  parking: 'Parking',
+  disa: 'DISA',
+  misc: 'Misc destinations',
+  terminate: 'Hang up'
+};
+
 export function FieldControl({
-  field, value, onChange, destinations, relations, autoFocus
+  field, value, onChange, destinations, relations, autoFocus, context
 }: {
   field: Field;
   value: any;
-  onChange: (v: any) => void;
+  /** `extra` carries sibling values a field sets, such as a destination's type. */
+  onChange: (v: any, extra?: Record<string, any>) => void;
   destinations?: Record<string, { value: any; label: string }[]>;
   relations?: { value: any; label: string }[];
   autoFocus?: boolean;
+  context?: Record<string, any>;
 }) {
   const common = { id: `f-${field.key}`, autoFocus };
   const label = (
@@ -195,6 +212,49 @@ export function FieldControl({
           <option value="">— none —</option>
           {(relations || []).map((r) => <option key={String(r.value)} value={r.value}>{r.label}</option>)}
         </select>
+      </div>
+    );
+  }
+
+  // Every destination the system already knows, grouped by type. Picking one
+  // writes the target and the sibling type field together, so an operator never
+  // has to remember which number belongs to which kind of thing.
+  if (field.type === 'destination_select') {
+    const groups = Object.entries(destinations || {}).filter(([, list]) => list.length > 0);
+    const siblingType = field.setsType ? String(context?.[field.setsType] ?? '') : '';
+    const selected = (() => {
+      if (value === undefined || value === null || value === '') return '';
+      const sameType = groups.find(([type, list]) => type === siblingType && list.some((d) => String(d.value) === String(value)));
+      if (sameType) return `${sameType[0]}:${value}`;
+      const anyType = groups.find(([, list]) => list.some((d) => String(d.value) === String(value)));
+      return anyType ? `${anyType[0]}:${value}` : `:${value}`;
+    })();
+    return (
+      <div className="field">
+        {label}
+        <select
+          className="select"
+          {...common}
+          value={selected}
+          onChange={(e) => {
+            const [type, target] = e.target.value.split(':');
+            onChange(
+              e.target.value === '' ? '' : target,
+              e.target.value !== '' && field.setsType && type ? { [field.setsType]: type } : undefined
+            );
+          }}
+        >
+          <option value="">— choose —</option>
+          {groups.map(([type, list]) => (
+            <optgroup key={type} label={DESTINATION_LABELS[type] || type}>
+              {list.map((d) => (
+                <option key={`${type}:${d.value}`} value={`${type}:${d.value}`}>{d.label} · {d.value}</option>
+              ))}
+            </optgroup>
+          ))}
+          {selected.startsWith(':') && <option value={selected}>{value} (not found)</option>}
+        </select>
+        {field.help && <span className="hint">{field.help}</span>}
       </div>
     );
   }

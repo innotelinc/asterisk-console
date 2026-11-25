@@ -4,7 +4,9 @@ import {
   Badge, Confirm, CopyButton, DataTable, EmptyState, FieldControl, Icon, Modal,
   Spinner, renderCell, useDebounced, useToast, type Column
 } from '../lib/ui';
-import { AiJingleButton, AiRecordingButton } from './ai';
+import { AiJingleButton } from './ai';
+import { AudioField, NewRecordingButton, ReplaceRecordingButton } from '../lib/audio-field';
+import { IvrMenuField } from '../lib/ivr-menu';
 
 export default function EntityPage({ name, meta, session }: { name: string; meta: Meta; session: Session }) {
   const entity: Entity | undefined = meta.entities[name];
@@ -98,7 +100,7 @@ export default function EntityPage({ name, meta, session }: { name: string; meta
               </span>
             );
           }
-          if (f.type === 'json') {
+          if (f.type === 'json' || f.type === 'menu') {
             let count = 0;
             try {
               const parsed = typeof v === 'string' ? JSON.parse(v || '[]') : v;
@@ -117,7 +119,7 @@ export default function EntityPage({ name, meta, session }: { name: string; meta
     {
       key: '__actions',
       label: '',
-      width: name === 'music' && canWrite ? 156 : playable ? 122 : 92,
+      width: name === 'music' && canWrite ? 156 : name === 'recordings' && canWrite ? 156 : playable ? 122 : 92,
       render: (row: any) => (
         <div className="actions" onClick={(e) => e.stopPropagation()}>
           {playable && (
@@ -126,6 +128,7 @@ export default function EntityPage({ name, meta, session }: { name: string; meta
             </button>
           )}
           {name === 'music' && canWrite && <UploadAudioButton row={row} onDone={load} />}
+          {name === 'recordings' && canWrite && <ReplaceRecordingButton row={row} onDone={load} />}
           {canWrite && (
             <>
               <button className="icon-btn" title="Edit" onClick={() => setEditing(row)} aria-label={`Edit ${row.id}`}>
@@ -161,7 +164,7 @@ export default function EntityPage({ name, meta, session }: { name: string; meta
         <div className="page-actions">
           {canWrite && (
             <>
-              {entity.ai === 'recording' && <AiRecordingButton onDone={load} />}
+              {entity.ai === 'recording' && <NewRecordingButton onDone={load} />}
               {entity.ai === 'jingle' && <AiJingleButton onDone={load} />}
               {name === 'music' && <ReloadMusicButton />}
               <button className="btn" onClick={() => setImportOpen(true)}>
@@ -411,16 +414,45 @@ function EntityForm({
           </div>
         )}
         <div className="form-grid">
-          {entity.fields.map((f) => (
-            <FieldControl
-              key={f.key}
-              field={f}
-              value={values[f.key]}
-              onChange={(v) => set(f.key, v)}
-              destinations={destinations}
-              relations={f.relation ? relations[f.relation] : undefined}
-            />
-          ))}
+          {entity.fields.map((f) => {
+            // Audio and IVR menus have their own controls: one picks or makes a
+            // recording, the other builds menu entries from what already exists.
+            if (f.type === 'audio') {
+              return (
+                <AudioField
+                  key={f.key}
+                  value={values[f.key]}
+                  onChange={(v) => set(f.key, v)}
+                  suggestName={String(values.name || values.extension || '').toLowerCase().replace(/[^a-z0-9]+/g, '-')}
+                  help={f.help}
+                />
+              );
+            }
+            if (f.type === 'menu') {
+              return (
+                <IvrMenuField
+                  key={f.key}
+                  value={values[f.key]}
+                  onChange={(v) => set(f.key, v)}
+                  destinations={destinations}
+                />
+              );
+            }
+            return (
+              <FieldControl
+                key={f.key}
+                field={f}
+                value={values[f.key]}
+                onChange={(v, extra) => {
+                  set(f.key, v);
+                  if (extra) for (const [key, value] of Object.entries(extra)) set(key, value);
+                }}
+                destinations={destinations}
+                relations={f.relation ? relations[f.relation] : undefined}
+                context={values}
+              />
+            );
+          })}
         </div>
       </form>
     </Modal>

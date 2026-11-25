@@ -101,7 +101,16 @@ const destFields = (prefix = 'destination') => [
     options: DEST_TYPES,
     default: 'extension'
   },
-  { key: `${prefix}`, label: 'Destination', type: 'destination', help: 'Target selected by type above' }
+  // One list of every destination the system already knows, grouped by type, so
+  // the operator picks from what exists instead of typing a number from memory.
+  // Choosing an entry also sets the type field beside it.
+  {
+    key: `${prefix}`,
+    label: 'Destination',
+    type: 'destination_select',
+    setsType: `${prefix}_type`,
+    help: 'Picked from the destinations that already exist; the type above follows'
+  }
 ];
 
 /** True when an entity's rows are compiled into Asterisk configuration files. */
@@ -260,10 +269,10 @@ export const ENTITIES = {
     fields: [
       { key: 'number', label: 'IVR number', type: 'number', required: true, unique: true, list: true, width: 120 },
       { key: 'name', label: 'Name', type: 'text', required: true, list: true },
-      { key: 'greeting', label: 'Greeting recording', type: 'text', help: 'Recording name, played before the menu' },
+      { key: 'greeting', label: 'Greeting recording', type: 'audio', help: 'Played before the menu; generate, upload or record it here' },
       { key: 'repeat_loops', label: 'Repeat loops', type: 'number', default: 3 },
       { key: 'timeout', label: 'Input timeout (s)', type: 'number', default: 10 },
-      { key: 'options', label: 'Menu entries', type: 'json', list: true, help: '[{"key":"1","type":"extension","target":"1001"}]' },
+      { key: 'options', label: 'Menu entries', type: 'menu', list: true, wide: true, help: 'What each key does when the caller presses it' },
       ...destFields('invalid_destination'),
       { key: 'enabled', label: 'Enabled', type: 'toggle', default: true, list: true }
     ]
@@ -308,7 +317,7 @@ export const ENTITIES = {
     fields: [
       { key: 'number', label: 'Feature code', type: 'number', required: true, unique: true, list: true, width: 120 },
       { key: 'name', label: 'Name', type: 'text', required: true, list: true },
-      { key: 'recording', label: 'Recording', type: 'text', required: true, list: true },
+      { key: 'recording', label: 'Recording', type: 'audio', required: true, list: true, help: 'The audio callers hear; generate it, upload a file or record it here' },
       { key: 'return_after', label: 'Return to caller after playback', type: 'toggle', default: false },
       { key: 'enabled', label: 'Enabled', type: 'toggle', default: true, list: true }
     ]
@@ -497,7 +506,7 @@ export const ENTITIES = {
     order: 'name',
     fields: [
       { key: 'name', label: 'Recording name', type: 'text', required: true, unique: true, list: true },
-      { key: 'filename', label: 'File', type: 'text', list: true, help: 'Path under the Asterisk sounds directory' },
+      { key: 'filename', label: 'File', type: 'text', list: true, help: 'Path under the Asterisk sounds directory', wide: true },
       { key: 'language', label: 'Language', type: 'text', default: 'en' },
       { key: 'description', label: 'Description', type: 'text' },
       { key: 'enabled', label: 'Enabled', type: 'toggle', default: true, list: true }

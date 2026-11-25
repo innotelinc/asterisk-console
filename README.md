@@ -121,9 +121,20 @@ routes through one OpenAI-compatible gateway (set `OMNIROUTE_BASE_URL`, default
   (`AI_TTS_MODEL`, default `google/gemini-2.5-flash-preview-tts`), stored on the `/data` volume and
   added as a recording. **Record voice input** captures the microphone in the browser, converts it
   to WAV locally and transcribes it (`AI_STT_MODEL`) so you can dictate the script instead of typing.
+- **New recording** offers all three ways at once: write it with AI, upload a file, or record it
+  from the microphone. The same modal is reachable from any field that plays audio.
 - **Music on Hold → Generate Jingle**: the model writes a one-line tagline from your brief, voices
   it, and mixes it over a synthesized music bed, then creates or updates the music class. Generating
   again **replaces** that class's audio instead of stacking a second Jingle in front of the first.
+- **Announcements and IVR greetings** are recordings too, so their *Recording* field is the same
+  control: pick an existing recording, hear it, or make one on the spot. **Upload** on a Recordings
+  row replaces that recording's audio in place, keeping its name — every destination that points at
+  it keeps working.
+- **IVR menus are built, not typed.** Each entry is a key plus a destination chosen from what already
+  exists (extensions, ring groups, queues, IVRs, announcements, voicemail, hang up…), with the type
+  following automatically, the next free key suggested, and duplicate keys flagged. Every other
+  destination field — inbound routes, time conditions, announcements — uses the same picker, so no
+  number has to be remembered or typed.
 
 Generated files live in `/data/media/moh/<class>` (hold music) and `/data/media/recordings`, and are
 served to signed-in users at `/api/media/…` with a **Preview** action on each record.

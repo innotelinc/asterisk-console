@@ -718,6 +718,86 @@ app.post('/api/ai/recordings', requireRole('operator'), async (req, res, next) =
   } catch (err) { next(err); }
 });
 
+// A recording from audio the operator already has: an uploaded file or a
+// browser recording. Same conversion as the hold-music upload, so whatever the
+// microphone or an MP3 produced becomes 8 kHz mono WAV that the PBX can play.
+const RAW_AUDIO = express.raw({
+  type: ['audio/*', 'application/octet-stream', 'video/*', 'application/ogg'],
+  limit: MAX_AUDIO_BYTES
+});
+
+function recordingNameFrom(req) {
+  const raw = req.get('x-name') || req.query.name || '';
+  try { return String(decodeURIComponent(raw)).trim(); } catch { return String(raw).trim(); }
+}
+
+app.post('/api/recordings/audio', requireRole('operator'), RAW_AUDIO, async (req, res, next) => {
+  try {
+    const name = recordingNameFrom(req);
+    if (!name) return res.status(400).json({ error: 'A recording name is required' });
+    if (!Buffer.isBuffer(req.body) || !req.body.length) {
+      return res.status(400).json({ error: 'The request body must be the audio file itself' });
+    }
+    const { wav, converted, source } = await toAsteriskWav(req.body);
+    const file = saveMedia('recordings', name, wav);
+    const db = getDb();
+    try {
+      const info = db.prepare(
+        'INSERT INTO recordings (name, filename, language, description, enabled) VALUES (?, ?, ?, ?, 1)'
+      ).run(
+        name,
+        `custom/${file.replace(/\.wav$/, '')}`,
+        String(req.query.language || 'en'),
+        String(req.query.description || (converted ? `Uploaded ${source} · converted to 8 kHz mono WAV` : 'Uploaded audio'))
+      );
+      const row = db.prepare('SELECT * FROM recordings WHERE id = ?').get(Number(info.lastInsertRowid));
+      audit({
+        actor: req.session.username, action: 'upload_recording', entity: 'recordings', entityId: row.id,
+        detail: { name, bytes: wav.length, converted, source, upload: req.get('x-filename') || null }, ip: req.ip
+      });
+      res.status(201).json({ row: redact('recordings', row, req.session), file: `/api/media/recordings/${file}`, converted, source });
+    } catch (err) {
+      removeRecordingFile(`custom/${file.replace(/\.wav$/, '')}`);
+      if (String(err.message).includes('UNIQUE')) {
+        return res.status(409).json({ error: 'A recording with that name already exists' });
+      }
+      throw err;
+    }
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+});
+
+// Replace one recording's audio without renaming it — re-recording a greeting
+// should not mean deleting the record every destination already points at.
+app.post('/api/entities/recordings/:id/audio', requireRole('operator'), RAW_AUDIO, async (req, res, next) => {
+  try {
+    const db = getDb();
+    const row = db.prepare('SELECT * FROM recordings WHERE id = ?').get(Number(req.params.id));
+    if (!row) return res.status(404).json({ error: 'Recording not found' });
+    if (!Buffer.isBuffer(req.body) || !req.body.length) {
+      return res.status(400).json({ error: 'The request body must be the audio file itself' });
+    }
+    const { wav, converted, source } = await toAsteriskWav(req.body);
+    // Write the new file before pointing the row at it, so the record never
+    // references audio that does not exist yet.
+    const file = saveMedia('recordings', row.name, wav);
+    db.prepare("UPDATE recordings SET filename = ?, updated_at = datetime('now') WHERE id = ?")
+      .run(`custom/${file.replace(/\.wav$/, '')}`, row.id);
+    if (row.filename) removeRecordingFile(row.filename);
+    const updated = db.prepare('SELECT * FROM recordings WHERE id = ?').get(row.id);
+    audit({
+      actor: req.session.username, action: 'replace_recording', entity: 'recordings', entityId: row.id,
+      detail: { name: row.name, bytes: wav.length, converted, source, upload: req.get('x-filename') || null }, ip: req.ip
+    });
+    res.status(201).json({ row: redact('recordings', updated, req.session), file: `/api/media/recordings/${file}`, converted, source });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+});
+
 app.post('/api/ai/jingle', requireRole('operator'), async (req, res, next) => {
   try {
     const brief = String(req.body?.prompt || '').trim();

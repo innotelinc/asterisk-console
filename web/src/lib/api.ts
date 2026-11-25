@@ -30,6 +30,8 @@ export type Field = {
   key: string; label: string; type: string; required?: boolean; unique?: boolean;
   options?: [string, string][]; help?: string; default?: any; list?: boolean;
   width?: number; relation?: string; secret?: boolean; wide?: boolean;
+  /** A destination field that writes the sibling type field when a value is picked. */
+  setsType?: string;
 };
 export type Entity = {
   label: string; plural: string; icon: string; fields: Field[]; searchable?: string[];
@@ -141,6 +143,39 @@ export const api = {
   }>('/api/ai/status'),
   createRecording: (body: { name: string; text: string; voice?: string; language?: string }) =>
     request<{ row: any; file: string; text: string }>('/api/ai/recordings', { method: 'POST', body }),
+  // A recording built from audio the operator already has (upload or mic).
+  uploadRecording: async (name: string, blob: Blob, filename?: string) => {
+    const res = await fetch('/api/recordings/audio', {
+      method: 'POST',
+      headers: {
+        'x-csrf': cookie('ac_csrf'),
+        'Content-Type': 'application/octet-stream',
+        'x-name': encodeURIComponent(name),
+        'x-filename': encodeURIComponent(filename || 'recording.wav')
+      },
+      credentials: 'same-origin',
+      body: blob
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new ApiError((data && data.error) || `Upload failed (${res.status})`, res.status);
+    return data as { row: any; file: string; converted: boolean; source: string };
+  },
+  // Replace one recording's audio in place, keeping every reference to it.
+  replaceRecordingAudio: async (id: number, file: File | Blob, filename?: string) => {
+    const res = await fetch(`/api/entities/recordings/${id}/audio`, {
+      method: 'POST',
+      headers: {
+        'x-csrf': cookie('ac_csrf'),
+        'Content-Type': 'application/octet-stream',
+        'x-filename': encodeURIComponent(filename || (file instanceof File ? file.name : 'recording.wav'))
+      },
+      credentials: 'same-origin',
+      body: file
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new ApiError((data && data.error) || `Upload failed (${res.status})`, res.status);
+    return data as { row: any; file: string; converted: boolean; source: string };
+  },
   createJingle: (body: { name: string; prompt: string; voice?: string }) =>
     request<{ row: any; file: string; tagline: string; seconds: number; directory: string; reload: MohReload }>('/api/ai/jingle', { method: 'POST', body }),
   // Upload own hold music; the server converts it to 8 kHz mono WAV.
