@@ -14,7 +14,7 @@ import {
   ENTITIES, NAV_GROUPS, SETTINGS_GROUPS, MODULES, SECRET_TYPES
 } from './schema.js';
 import {
-  getDb, ensureSchema, seedDemo, getSettings, setSetting, getSetting, audit, isEmpty, qi
+  getDb, ensureSchema, getSettings, setSetting, getSetting, audit, isEmpty, qi
 } from './db.js';
 import {
   hashPassword, hashToken, verifyPassword, sessionFromRequest, setSessionCookies,
@@ -22,7 +22,8 @@ import {
   recordFailure, clearFailures, tokenFromRequest
 } from './auth.js';
 import {
-  generateConfigs, testDialplan, hostStats, startAmi, getAmiState, amiConfigured, reloadMusicOnHold
+  generateConfigs, testDialplan, hostStats, startAmi, restartAmi, getAmiState, amiConfigured,
+  reloadMusicOnHold, testAmiConnection
 } from './asterisk.js';
 import {
   aiInfo, aiConfigured, buildRecording, buildJingle, transcribe, saveMedia, mediaPath, slugify,
@@ -38,12 +39,6 @@ const HOST = process.env.HOST || '0.0.0.0';
 const WEB_DIST = join(__dirname, '..', 'web', 'dist');
 
 ensureSchema();
-if (process.env.SEED_DEMO !== '0') seedDemo();
-
-// Live channel activity is cosmetic demo data for an instance with no AMI feed.
-// It is opt-in, and it never writes call records: the cdr table is for real
-// records from Asterisk, so a demo instance must not fill it with fake calls.
-const SIMULATE_CALLS = process.env.SIMULATE_CALLS === '1';
 
 const SCHEMA_VERSION = '1.0.0';
 const app = express();
@@ -131,7 +126,8 @@ function publicMeta() {
       version: SCHEMA_VERSION,
       asteriskConfigDir: getSetting('ast_config_dir', '/etc/asterisk'),
       amiConfigured: amiConfigured(),
-      seeded: !isEmpty()
+      seeded: !isEmpty(),
+      setupCompleted: getSetting('setup_completed') === '1'
     },
     nav: NAV_GROUPS,
     entities,
@@ -543,6 +539,70 @@ app.post('/api/entities/:entity/import', requireRole('operator'), (req, res) => 
 });
 
 // ---------------------------------------------------------------------------
+// First-run setup wizard
+// ---------------------------------------------------------------------------
+// The wizard writes the same settings the Advanced Settings page edits, then
+// records that setup is done so it does not reappear at every sign-in. Nothing
+// here seeds sample data: a fresh install starts empty on purpose.
+app.get('/api/setup', (req, res) => {
+  const db = getDb();
+  const counts = {};
+  for (const table of ['extensions', 'trunks', 'dids', 'queues', 'ivrs']) {
+    counts[table] = Number(db.prepare(`SELECT COUNT(*) AS c FROM ${table}`).get().c);
+  }
+  const values = getSettings();
+  if (req.session.role === 'readonly') delete values.ami_secret;
+  res.json({
+    completed: getSetting('setup_completed') === '1',
+    adminExists: adminExists(),
+    counts,
+    settings: {
+      pbx_name: values.pbx_name || '',
+      pbx_timezone: values.pbx_timezone || 'UTC',
+      pbx_language: values.pbx_language || 'en',
+      ami_host: values.ami_host || '',
+      ami_port: values.ami_port || '5038',
+      ami_user: values.ami_user || '',
+      ami_secret: values.ami_secret || '',
+      ast_config_dir: values.ast_config_dir || '/etc/asterisk'
+    }
+  });
+});
+
+// Test the credentials the operator typed before saving them: a wrong secret
+// should be a message in the wizard, not a broken AMI link afterwards.
+app.post('/api/setup/ami-test', requireRole('admin'), async (req, res) => {
+  const { host, port, user, secret } = req.body || {};
+  if (!host || !user) return res.status(400).json({ error: 'AMI host and user are required' });
+  const result = await testAmiConnection({
+    host: String(host),
+    port: Number(port) || 5038,
+    user: String(user),
+    secret: String(secret || '')
+  });
+  res.json(result);
+});
+
+app.post('/api/setup/complete', requireRole('admin'), (req, res) => {
+  const body = req.body || {};
+  const keys = [
+    'pbx_name', 'pbx_timezone', 'pbx_language',
+    'ami_host', 'ami_port', 'ami_user', 'ami_secret', 'ast_config_dir'
+  ];
+  const saved = [];
+  for (const key of keys) {
+    if (body[key] === undefined) continue;
+    setSetting(key, body[key]);
+    saved.push(key);
+  }
+  setSetting('setup_completed', '1');
+  // The AMI client holds a socket opened with the old credentials.
+  if (saved.some((key) => key.startsWith('ami_'))) restartAmi();
+  audit({ actor: req.session.username, action: 'setup_complete', entity: 'settings', detail: saved, ip: req.ip });
+  res.json({ ok: true, values: getSettings() });
+});
+
+// ---------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------
 app.get('/api/settings', (req, res) => {
@@ -560,6 +620,9 @@ app.put('/api/settings', requireRole('admin'), (req, res) => {
     if (value === undefined) continue;
     setSetting(key, value);
   }
+  // AMI settings feed a long-lived socket, so a change must drop the old
+  // session or the new credentials would only apply after a restart.
+  if (Object.keys(body).some((key) => key.startsWith('ami_'))) restartAmi();
   audit({ actor: req.session.username, action: 'settings_update', entity: 'settings', detail: Object.keys(body), ip: req.ip });
   res.json({ values: getSettings() });
 });
@@ -867,50 +930,13 @@ app.get('/api/dashboard', (req, res) => {
 // Live event stream (SSE)
 // ---------------------------------------------------------------------------
 const sseClients = new Set();
-const activeCalls = new Map();
-let tick = 0;
-
-function simulateCalls() {
-  tick += 1;
-  const db = getDb();
-  const exts = db.prepare('SELECT extension, name FROM extensions WHERE enabled = 1').all();
-  const queues = db.prepare('SELECT number, name FROM queues WHERE enabled = 1').all();
-
-  // Start a call occasionally.
-  if (exts.length && Math.random() < 0.35 && activeCalls.size < 6) {
-    const src = exts[Math.floor(Math.random() * exts.length)];
-    const dst = exts[Math.floor(Math.random() * exts.length)];
-    const id = randomUUID();
-    const queue = queues.length && Math.random() < 0.4 ? queues[Math.floor(Math.random() * queues.length)] : null;
-    activeCalls.set(id, {
-      id,
-      caller: String(src.extension),
-      callerName: src.name,
-      callee: queue ? String(queue.number) : String(dst.extension),
-      calleeName: queue ? queue.name : dst.name,
-      state: queue ? 'waiting' : 'ringing',
-      startedAt: Date.now(),
-      direction: Math.random() < 0.3 ? 'inbound' : 'internal',
-      queue: queue?.name || null
-    });
-  }
-
-  // Advance states.
-  for (const [id, call] of activeCalls) {
-    const age = Date.now() - call.startedAt;
-    if (call.state === 'ringing' && age > 4000) call.state = 'talking';
-    if (call.state === 'waiting' && age > 6000) call.state = 'talking';
-    // The call simply ends. Nothing is written to cdr: a simulated call must
-    // never masquerade as a real record in the call history or its exports.
-    if (age > 45000) activeCalls.delete(id);
-  }
-}
 
 function broadcast() {
   const ami = getAmiState();
-  // With AMI connected the channel list is what Asterisk reports. The simulator
-  // is only a fallback for an instance with no PBX to talk to.
-  const calls = ami.connected ? ami.channels : [...activeCalls.values()];
+  // The channel list is what Asterisk reports. With no AMI link there is no
+  // channel source at all, so an unconfigured console reports no active calls
+  // rather than inventing any.
+  const calls = ami.connected ? ami.channels : [];
   const payload = JSON.stringify({
     type: 'tick',
     at: new Date().toISOString(),
@@ -942,9 +968,6 @@ setInterval(() => {
   // Keeps the AMI session alive (and retries while the PBX is unreachable).
   startAmi();
   if (!sseClients.size) return;
-  // Only model channel activity when it is switched on, only while someone is
-  // watching, and never while Asterisk is actually reporting channels.
-  if (SIMULATE_CALLS && !getAmiState().connected) simulateCalls();
   broadcast();
 }, 4000);
 

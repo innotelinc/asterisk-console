@@ -773,6 +773,59 @@ function amiConnect() {
   });
 }
 
+/**
+ * Check AMI credentials without saving them: log in, ask for the core status,
+ * then hang up. Always resolves, so the setup wizard can say why it failed.
+ */
+export function testAmiConnection({ host, port, user, secret }) {
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ host, port });
+    let buffer = '';
+    let loggedIn = false;
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      try { socket.destroy(); } catch {}
+      resolve(value);
+    };
+    socket.setTimeout(5000, () => finish({ ok: false, error: 'Connection timed out' }));
+    socket.on('error', (err) => finish({ ok: false, error: err.message }));
+    socket.on('connect', () => {
+      socket.write(`Action: Login\r\nUsername: ${user}\r\nSecret: ${secret}\r\nEvents: off\r\n\r\n`);
+    });
+    socket.on('data', (chunk) => {
+      buffer += chunk.toString('utf8');
+      if (!loggedIn) {
+        if (!/Response: (Success|Error)/.test(buffer)) return;
+        if (/Response: Error/.test(buffer)) {
+          const line = buffer.split('\r\n').find((l) => l.toLowerCase().startsWith('message:'));
+          return finish({ ok: false, error: line ? line.slice(line.indexOf(':') + 1).trim() : 'Login refused' });
+        }
+        loggedIn = true;
+        buffer = '';
+        socket.write('Action: CoreStatus\r\nActionID: setup\r\n\r\n');
+        return;
+      }
+      if (/Response: (Success|Error)/.test(buffer)) finish({ ok: true });
+    });
+  });
+}
+
+/** Apply changed AMI settings now instead of on the next restart. */
+export function restartAmi() {
+  if (amiSession) {
+    const session = amiSession;
+    amiSession = null;
+    // Mark it closed first, so its close handler does not overwrite the state
+    // with an error from the connection we are deliberately dropping.
+    session.closed = true;
+    try { session.socket?.destroy(); } catch {}
+  }
+  amiState = { connected: false, lastError: null, lastPoll: new Date().toISOString(), info: {}, channels: [] };
+  return startAmi();
+}
+
 /** Start (or keep) the AMI session. Safe to call on a timer. */
 export function startAmi() {
   if (!amiConfigured()) {

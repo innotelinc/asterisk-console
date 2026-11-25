@@ -6,7 +6,7 @@ import {
 } from '../lib/ui';
 
 /* ---------------------------------------------------------------- settings */
-export function SettingsPage({ meta, session }: { meta: Meta; session: Session }) {
+export function SettingsPage({ meta, session, navigate }: { meta: Meta; session: Session; navigate?: (hash: string) => void }) {
   const [group, setGroup] = useState(meta.settingsGroups[0]?.group || '');
   const [values, setValues] = useState<Record<string, any> | null>(null);
   const [dirty, setDirty] = useState<Record<string, any>>({});
@@ -57,6 +57,12 @@ export function SettingsPage({ meta, session }: { meta: Meta; session: Session }
         </div>
         <div className="page-actions">
           {readOnly && <Badge tone="warn">Read only</Badge>}
+          {navigate && !readOnly && (
+            <button className="btn" onClick={() => navigate('#/setup')} title="Walk through the setup wizard again">
+              <Icon name="Zap" size={15} />
+              Setup wizard
+            </button>
+          )}
           <button className="btn primary" onClick={save} disabled={busy || readOnly || !Object.keys(dirty).length}>
             {busy ? <span className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} /> : <Icon name="Save" size={15} />}
             Save changes{Object.keys(dirty).length ? ` (${Object.keys(dirty).length})` : ''}
@@ -381,7 +387,7 @@ export function SystemPage({ meta }: { meta: Meta }) {
           <div className="card-body col">
             <Row label="Version" value={meta.app.version} />
             <Row label="Storage" value="SQLite (WAL mode)" />
-            <Row label="Demo data" value={meta.app.seeded ? <Badge tone="ok">Loaded</Badge> : <Badge>Empty</Badge>} />
+            <Row label="Configuration" value={meta.app.seeded ? <Badge tone="ok">Configured</Badge> : <Badge>Empty</Badge>} />
             <Row label="Modules consolidated" value={`${meta.modules.length}`} />
             <Row label="Data modules" value={`${Object.keys(meta.entities).length}`} />
             <Row label="Runtime" value="Single container, no PHP" />

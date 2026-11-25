@@ -15,6 +15,10 @@ Open <http://localhost:8080> and sign in as `admin` (or `ADMIN_USER`). `ADMIN_PA
 source of the bootstrap password: without it the app waits for the first-run setup screen, and a
 short password aborts startup rather than creating a weak account.
 
+Once the administrator exists the setup wizard opens: name the PBX, optionally link Asterisk over
+AMI, and create the first extension. Nothing is seeded, so an install that skips the wizard is
+simply empty rather than full of sample extensions.
+
 ---
 
 ## What was observed
@@ -148,12 +152,11 @@ ADMIN_PASSWORD='a-long-password' docker compose up -d
 - First boot creates the admin from `ADMIN_PASSWORD` only — no default, no test credential. Without
   it you get the first-run setup screen; a password under 8 characters stops startup with a clear
   error before the server listens.
-- `SEED_DEMO=1` (default) loads a working configuration: 6 extensions, 2 trunks, 3 DIDs,
-  inbound/outbound routes, 2 ring groups, 2 queues, an IVR, time groups/conditions, voicemail,
-  parking, DISA, feature codes, contacts, music classes and call history.
-- `SIMULATE_CALLS=1` (off by default) animates live channel activity on the dashboard for a demo
-  instance with no AMI feed. Simulated calls are never written to the CDR table.
-- Point the console at Asterisk's AMI and the demo data gives way to the real thing: with
+- A fresh install starts empty: no sample extensions, trunks or call records. The setup wizard,
+  shown once the administrator exists and re-runnable from Settings, names the PBX, optionally
+  links Asterisk over AMI (testing the credentials before saving them) and creates the first
+  extension.
+- Point the console at Asterisk's AMI and the real thing takes over: with
   `ami_host` / `ami_port` / `ami_user` / `ami_secret` set (Settings → Asterisk), the console keeps one
   AMI session open, Asterisk's channel events feed the live channel list and `cdr_manager`'s `Cdr`
   events are stored as call records. The AMI user needs read classes
@@ -260,6 +263,11 @@ settings, allowed to create extensions), config generation with zero warnings an
 unmatched), dashboard metrics, CDR filters, CSV export, settings update, API-token issuance, audit
 entries, SSE ticks, SPA shell + deep-link routing and asset content types.
 
+A fresh install was exercised end to end against an empty volume: `needsSetup` before an
+administrator existed, no rows in any module (no demo data), the wizard's state endpoint, an AMI
+credential test that failed cleanly, extension creation with the wizard's payload, setup completion
+marking `setupCompleted`, and config generation with six files and no warnings.
+
 The Docker image was built and run as a non-root container against a fresh volume, and the browser
 UI was exercised for sign-in, dashboard, the extension list and the create-extension form.
 
@@ -271,9 +279,9 @@ the `cdr_manager` records Asterisk emits at hangup. The UI was not clicked throu
 
 - Asterisk is not bundled: this container manages configuration and state; point
   `ast_config_dir` at a shared volume (or mount it) and reload Asterisk after applying.
-- Demo call history is seeded once by `SEED_DEMO`, and live channel activity can be animated with
-  `SIMULATE_CALLS=1`; neither writes simulated calls into `cdr` after boot. Real CDRs arrive over
-  AMI from `cdr_manager`, which is enabled by default in FreePBX; records are de-duplicated on
-  `uniqueid`, so a CDR Asterisk finalizes twice is stored once with its final duration.
+- No sample data ships. Live channels and call records come only from Asterisk over AMI
+  (`cdr_manager`, enabled by default in FreePBX); with no AMI link the console reports no active
+  calls and an empty call history. Records are de-duplicated on `uniqueid`, so a CDR Asterisk
+  finalizes twice is stored once with its final duration.
 - FreePBX `.conf` imports, commercial modules (endpoint manager, fax pro, etc.) and PHP hook
   modules are out of scope by design.

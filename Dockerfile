@@ -16,8 +16,7 @@ WORKDIR /app
 ENV NODE_ENV=production \
     PORT=8080 \
     HOST=0.0.0.0 \
-    DATA_DIR=/data \
-    SEED_DEMO=1
+    DATA_DIR=/data
 
 # ffmpeg converts uploaded hold music from any format to the 8 kHz mono WAV
 # Asterisk plays. The runtime user only needs to execute it.

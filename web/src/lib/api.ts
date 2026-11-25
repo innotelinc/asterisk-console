@@ -1,6 +1,17 @@
 /** Typed-ish fetch wrapper: same-origin cookies + CSRF header on mutations. */
 
 export type Session = { sub: number; username: string; name: string; role: 'admin' | 'operator' | 'readonly' };
+/** State the first-run setup wizard starts from. */
+export type SetupState = {
+  completed: boolean;
+  adminExists: boolean;
+  counts: Record<string, number>;
+  settings: {
+    pbx_name: string; pbx_timezone: string; pbx_language: string;
+    ami_host: string; ami_port: string; ami_user: string; ami_secret: string;
+    ast_config_dir: string;
+  };
+};
 /** Whether Asterisk was told to re-read its music-on-hold classes, and why not. */
 export type MohReload = { reloaded: boolean; reason: string };
 export type Field = {
@@ -13,7 +24,7 @@ export type Entity = {
   order?: string; configFile?: string; system?: boolean; ai?: 'recording' | 'jingle';
 };
 export type Meta = {
-  app: { name: string; version: string; asteriskConfigDir: string; amiConfigured: boolean; seeded: boolean };
+  app: { name: string; version: string; asteriskConfigDir: string; amiConfigured: boolean; seeded: boolean; setupCompleted: boolean };
   nav: { id: string; label: string; items: { key?: string; entity?: string; label: string; icon: string }[] }[];
   entities: Record<string, Entity>;
   settingsGroups: { group: string; items: Field[] }[];
@@ -66,6 +77,12 @@ export const api = {
   setup: (body: { username: string; password: string; name?: string; email?: string }) =>
     request<{ user: Session }>('/api/auth/setup', { method: 'POST', body }),
   logout: () => request('/api/auth/logout', { method: 'POST' }),
+
+  setupState: () => request<SetupState>('/api/setup'),
+  completeSetup: (body: Record<string, any>) =>
+    request<{ ok: boolean }>('/api/setup/complete', { method: 'POST', body }),
+  testAmi: (body: { host: string; port: number | string; user: string; secret: string }) =>
+    request<{ ok: boolean; error?: string }>('/api/setup/ami-test', { method: 'POST', body }),
 
   meta: () => request<Meta>('/api/meta'),
   list: (entity: string, query: Record<string, any> = {}) => {

@@ -3,6 +3,7 @@ import { api, ApiError, type Meta, type Session } from './lib/api';
 import { Icon, ToastProvider, useToast } from './lib/ui';
 import { LiveCtx, type Tick } from './lib/live';
 import LoginPage from './pages/login';
+import SetupPage from './pages/setup';
 import DashboardPage from './pages/dashboard';
 import EntityPage from './pages/entities';
 import { CdrPage, CallsPage } from './pages/cdr';
@@ -28,7 +29,8 @@ const PAGE_META: Record<string, string> = {
   audit: 'Audit Log',
   system: 'System Status',
   tokens: 'API Tokens',
-  modules: 'Module Registry'
+  modules: 'Module Registry',
+  setup: 'Setup Wizard'
 };
 
 const THEME_KEY = 'ac-theme';
@@ -56,6 +58,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [tick, setTick] = useState<Tick | null>(null);
   const [liveConnected, setLiveConnected] = useState(false);
+  const [wizardDismissed, setWizardDismissed] = useState(false);
   const { theme, toggle } = useTheme();
 
   useEffect(() => {
@@ -145,6 +148,27 @@ export default function App() {
     );
   }
 
+  // A fresh install lands in the wizard once the administrator exists; it can be
+  // re-run from Settings, and "skip for now" only hides it for this session.
+  if (meta && (route.page === 'setup' || (!meta.app.setupCompleted && !wizardDismissed))) {
+    return (
+      <ToastProvider>
+        <SetupPage
+          onDone={async () => {
+            setWizardDismissed(false);
+            setBooting(true);
+            await boot();
+            navigate('#/dashboard');
+          }}
+          onSkip={() => {
+            setWizardDismissed(true);
+            navigate('#/dashboard');
+          }}
+        />
+      </ToastProvider>
+    );
+  }
+
   const activeEntity = route.page === 'entity' ? route.entity : undefined;
   const navLabel = activeEntity
     ? meta?.entities[activeEntity]?.plural || activeEntity
@@ -157,7 +181,7 @@ export default function App() {
       case 'calls': return <CallsPage navigate={navigate} />;
       case 'cdr': return <CdrPage session={session} />;
       case 'tools': return <ToolsPage meta={meta!} session={session} />;
-      case 'settings': return <SettingsPage meta={meta!} session={session} />;
+      case 'settings': return <SettingsPage meta={meta!} session={session} navigate={navigate} />;
       case 'tokens': return <TokensPage meta={meta!} session={session} />;
       case 'audit': return <AuditPage />;
       case 'system': return <SystemPage meta={meta!} />;
