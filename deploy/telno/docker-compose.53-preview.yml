@@ -1,0 +1,87 @@
+# Telno on 192.168.1.53 — optional side-by-side preview.
+#
+#   docker compose -f docker-compose.53-preview.yml build
+#   docker compose -f docker-compose.53-preview.yml up -d
+#   docker compose -f docker-compose.53-preview.yml down -v     # dry run over
+#
+# Why this file exists: the cutover file uses host networking, and the switch
+# inside the image always binds 0.0.0.0:5060/udp, 5038/tcp, 8088/tcp, 8089/tcp
+# and 10000-10100/udp — generated configuration with no environment switch for
+# any of them. On host networking a second copy therefore cannot start while the
+# old telno-terminals container owns 5060, and publishing the same RTP range
+# would collide just the same.
+#
+# So the preview runs on a bridge network of its own and publishes one port:
+# 8081. Asterisk still starts inside the container (supervisor does that
+# regardless of TELEPHONY_ENABLED) but its SIP/RTP/AMI sockets stay inside that
+# namespace, where they collide with nothing.
+#
+# What this proves: sign-in, database creation and migrations, the console, the
+# public directory, the API, and the browser softphone's signalling relay.
+# What it cannot prove: handset registration, carrier calls, fax and audio —
+# those need 5060/udp and the RTP range, which only exist at cutover.
+#
+# The image is the same as the cutover build; the tag is shared on purpose so the
+# 30-60 minute Asterisk compile is done once.
+
+name: telno-preview
+
+services:
+  telno:
+    build:
+      context: ${TELNO_SRC:-/opt/telno}
+      dockerfile: Dockerfile
+      args:
+        NODE_IMAGE: ${NODE_IMAGE:-node:24-bookworm-slim}
+        SWITCH_IMAGE: ${SWITCH_IMAGE:-debian:bookworm}
+        ASTERISK_VERSION: ${ASTERISK_VERSION:-22-current}
+
+    image: telno:${TELNO_TAG:-archive-2026-10-29}
+    container_name: telno-preview
+    restart: unless-stopped
+    hostname: telno-preview
+
+    env_file:
+      - .env
+
+    environment:
+      # Overrides the cutover values in .env; environment wins over env_file.
+      PUBLIC_URL: https://telno-new.innotel.site
+      PORT: "8081"
+      HOST: 0.0.0.0
+      NODE_ENV: production
+      DATA_DIR: /data
+      ASTERISK_CONFIG_DIR: /etc/asterisk
+      LOG_LEVEL: ${LOG_LEVEL:-warn}
+
+    ports:
+      # The console only. Nothing else is reachable from the host, which is the
+      # whole point of this file.
+      - "8081:8080"
+
+    volumes:
+      # Separate volumes: a dry run must not touch the cutover database.
+      - telno-preview-data:/data
+      - telno-preview-asterisk:/etc/asterisk
+      - telno-preview-spool:/var/spool/asterisk
+
+    stop_grace_period: 30s
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/api/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 25s
+
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+
+volumes:
+  telno-preview-data:
+  telno-preview-asterisk:
+  telno-preview-spool:

@@ -1,18 +1,22 @@
-# Telno on 192.168.1.53 — built from branch `archive/local-main-2026-10-29`.
-#
-# This is the branch that was reviewed and chosen, not `main`. The image
-# compiles Asterisk 22 from source with its own pjproject (PJSIP_MAX_PKT_LEN
-# raised to 65535, so a browser INVITE with video does not overflow), then runs
-# the switch and the Fastify API under supervisor as uid 999.
+# Telno on 192.168.1.53 — cutover file, built from branch
+# `archive/local-main-2026-10-29` (pinned at 368a013), not `main`.
 #
 #   docker compose -f docker-compose.53.yml build     # 30-60 min: builds Asterisk
 #   docker compose -f docker-compose.53.yml up -d
 #
 # Host networking is deliberate: the web port, SIP, RTP and AMI land on the
-# host's own stack, so a reverse proxy reaches the app over a plain socket and
-# no SDP address has to be rewritten through Docker's NAT. That also means the
-# ports below cannot be published or remapped — they are the process's own
-# listeners, and only one process on .53 may own each of them.
+# host's own stack, so the reverse proxy reaches the app over a plain socket and
+# no SDP address has to be rewritten through Docker's NAT. The carrier's NAT
+# forwards for 5060/udp and 10000-10100/udp then keep pointing at .53 unchanged.
+#
+# The cost is that the ports below are the process's own listeners — they cannot
+# be published, remapped or overlapped. In particular the switch's SIP transport
+# is generated as `bind=0.0.0.0:5060` and its RTP range as 10000-10100 in
+# src/telephony/provision.js; there is no environment variable that moves either.
+# So this file runs only when Telno is the single switch on the host: stop the old
+# telno-terminals container first. For a side-by-side dry run use
+# docker-compose.53-preview.yml, which publishes 8081 only and keeps the switch
+# inside its own network namespace.
 
 name: telno
 
@@ -42,9 +46,8 @@ services:
       - .env
 
     environment:
-      # The process's own listener. 8081 while the old app still holds 8080.
-      # Deliberately not called PORT in .env: an ambient PORT in the host's
-      # environment would silently win over the file and move the listener.
+      # The process's own listener. Deliberately not called PORT in .env: an
+      # ambient PORT in the host's environment would silently win over the file.
       PORT: ${TELNO_PORT:-8080}
       HOST: 0.0.0.0
       NODE_ENV: production
@@ -56,6 +59,9 @@ services:
       - telno-data:/data                 # database, secrets, recordings, backups
       - telno-asterisk:/etc/asterisk     # generated switch configuration
       - telno-spool:/var/spool/asterisk  # voicemail and fax spool
+
+    # Asterisk gets time to hang up channels and flush its spool on a stop.
+    stop_grace_period: 30s
 
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${TELNO_PORT:-8080}/api/healthz"]
