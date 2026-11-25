@@ -34,18 +34,16 @@ export const ENGINE_CONTAINER = 'asterisk-console-pbx';
 const ENGINE_LABEL = 'com.asterisk-console.engine';
 
 /**
- * Asterisk lines the console can install. The images are the maintained
- * multi-arch builds from andrius/asterisk; the support date is the upstream
- * end-of-security-support date, so the picker says what you are committing to.
+ * The Asterisk long-term-support lines the console can install: 22 (current
+ * LTS), 24 (next LTS, still a release candidate upstream) and 20 (previous
+ * LTS). The images are the maintained multi-arch builds from andrius/asterisk;
+ * the support date is the upstream end-of-security-support date, so the picker
+ * says what you are committing to.
  */
 export const ENGINE_VERSIONS = [
   { id: '22', label: 'Asterisk 22 LTS', image: 'andrius/asterisk:22', support: '2029-10', recommended: true },
   { id: '24', label: 'Asterisk 24 LTS (release candidate)', image: 'andrius/asterisk:24-rc', support: '2031-10' },
-  { id: '23', label: 'Asterisk 23 (standard)', image: 'andrius/asterisk:23', support: '2027-10' },
-  { id: '20', label: 'Asterisk 20 LTS', image: 'andrius/asterisk:20', support: '2027-10' },
-  { id: '21', label: 'Asterisk 21 (standard)', image: 'andrius/asterisk:21', support: '2026-10', eol: true },
-  { id: '19', label: 'Asterisk 19 (standard)', image: 'andrius/asterisk:19', support: '2024-10', eol: true },
-  { id: '18', label: 'Asterisk 18 LTS', image: 'andrius/asterisk:18', support: '2025-10', eol: true }
+  { id: '20', label: 'Asterisk 20 LTS', image: 'andrius/asterisk:20', support: '2027-10' }
 ];
 
 export function engineVersion(id) {
