@@ -37,7 +37,8 @@ services:
         ASTERISK_VERSION: ${ASTERISK_VERSION:-22-current}
 
     image: telno:${TELNO_TAG:-archive-2026-10-29}
-    container_name: telno-preview
+    # No container_name: compose names it telno-preview-telno-1, which keeps the
+    # dry run out of the way of any stale entry left by a previous attempt.
     restart: unless-stopped
     hostname: telno-preview
 
@@ -47,7 +48,10 @@ services:
     environment:
       # Overrides the cutover values in .env; environment wins over env_file.
       PUBLIC_URL: https://telno-new.innotel.site
-      PORT: "8081"
+      # Inside the container the app always listens on 8080; the mapping below
+      # is what makes it 8081 on the host. Setting PORT=8081 here would leave
+      # 8080 empty and the published port would reset every connection.
+      PORT: "8080"
       HOST: 0.0.0.0
       NODE_ENV: production
       DATA_DIR: /data

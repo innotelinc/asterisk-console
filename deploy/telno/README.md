@@ -16,6 +16,37 @@ Three files, all in this directory:
 The image compiles Asterisk 22 from source with its own pjproject, so the first
 build is the slow part (30–60 minutes, needs ~5 GB of disk).
 
+## 0. What is already on .53
+
+Measured on the host before this deployment, because the cutover and rollback
+commands depend on it:
+
+| Thing | Value |
+| --- | --- |
+| Old app | image `telno:latest`, container **`telno`**, `network_mode: host`, healthy on 8080 |
+| Old app's nature | **control plane only** — no Asterisk binary in the image (`TELNO_DB=/data/control-plane.db`) |
+| Old app's files | `/opt/telno/` — `docker-compose.yml` + `.env`; **leave in place**, rollback recreates from here |
+| Data volume | `telno_telno-data`, owned **1000:1000**, holds `control-plane.db` |
+| Branch checkout | `/opt/telno-src` at `368a013` (kept apart from `/opt/telno`) |
+| This deployment | `/opt/telno-deploy`, compose + `.env` copied from here |
+| Host | Ubuntu 26.04, Docker 29.10, Compose v5.8, 39 GB free, `ufw` inactive |
+| In front | openresty terminating TLS, **not on .53** — `.53`'s WAN address is 73.68.203.71, but 443 is forwarded by the router to another LAN host, which is what serves `telno.innotel.site` today |
+| What .53 publishes | 8080 (the app) and 5060/udp + 5038/tcp + 10000-10100/udp (the switch); nothing on 443 |
+
+Three consequences:
+
+- The old container owns the name `telno`, so the cutover **renames** it before
+  `up -d`. Compose still adopts the renamed container — it carries the project
+  labels — and **recreates** it as the new image, so `telno-legacy` does not
+  survive as a container. The `telno:latest` image and the volume do, and §6
+  reconstructs the old container from them with one `docker run`.
+- The new image runs as uid 999 and reuses that same volume, so the volume is
+  chowned once at cutover, and chowned back to 1000:1000 before a rollback. A
+  rollback that skips that step leaves the old app unable to write its database.
+- Cutting over on .53 does **not** change what `telno.innotel.site` serves. The
+  public site stays on the old hub until the proxy host's upstream is repointed
+  from wherever it points now to `http://192.168.1.53:8080`.
+
 ## The port plan, and why 5060 decides it
 
 The switch's ports are **generated configuration, not settings**:
@@ -68,14 +99,16 @@ are only provable at cutover, because they need 5060 and 10000–10100.
 ## 2. Checkout and files
 
 ```bash
-git clone --branch archive/local-main-2026-10-29 https://github.com/innotelinc/telno.git /opt/telno
-cd /opt/telno && git checkout 368a013
+git clone --branch archive/local-main-2026-10-29 https://github.com/innotelinc/telno.git /opt/telno-src
+cd /opt/telno-src && git checkout 368a013
 
 mkdir -p /opt/telno-deploy && cd /opt/telno-deploy
 cp <this repo>/deploy/telno/docker-compose.53.yml .
 cp <this repo>/deploy/telno/docker-compose.53-preview.yml .
 cp <this repo>/deploy/telno/env.53 .env
 chmod 600 .env
+# The compose build context; /opt/telno is the old deployment and must stay put.
+echo 'TELNO_SRC=/opt/telno-src' >> .env
 ```
 
 The compose files stay outside the checkout so a `git pull` never touches them.
@@ -117,17 +150,25 @@ docker compose -f docker-compose.53-preview.yml down -v
 Stop the old app without removing it, so rollback is a `docker start`:
 
 ```bash
-docker ps --format '{{.Names}}\t{{.Image}}' | grep -i telno
-docker stop <old-telno-terminals-container>
+# 1. free the name and the port. The rename does not preserve the container:
+#    compose adopts it by its project labels and recreates it. The volume and
+#    telno:latest are what make §6 possible.
+docker stop telno
+docker rename telno telno-legacy
 
+# 2. hand the shared volume to the image's uid (it was written by uid 1000)
+docker run --rm -v telno_telno-data:/d alpine:3.20 chown -R 999:999 /d
+
+# 3. start the switch
 cd /opt/telno-deploy
 docker compose -f docker-compose.53.yml up -d
 docker compose -f docker-compose.53.yml ps
 curl -fsS http://127.0.0.1:8080/api/healthz
 ```
 
-Then point `telno.innotel.site` at `http://192.168.1.53:8080` in the proxy and
-take the generated owner password:
+Then point `telno.innotel.site` at `http://192.168.1.53:8080` on the proxy host —
+which is not .53, so this needs access to that machine — and take the generated
+owner password:
 
 ```bash
 docker compose -f docker-compose.53.yml exec telno cat /data/first-run-password.txt
@@ -149,7 +190,23 @@ Any time before the volumes are deleted:
 ```bash
 cd /opt/telno-deploy
 docker compose -f docker-compose.53.yml down      # container gone, volumes kept
-docker start <old-telno-terminals-container>      # old app back on 8080/5060
+docker run --rm -v telno_telno-data:/d alpine:3.20 chown -R 1000:1000 /d
+
+# The old container was recreated by compose, so rebuild it from the image it
+# still has. This is the config the cutover replaced, captured by docker inspect.
+docker run -d --name telno --network host --restart unless-stopped \
+  -v telno_telno-data:/data \
+  -e HOST=0.0.0.0 -e PORT=8080 -e NODE_ENV=production \
+  -e NODE_OPTIONS=--max-old-space-size=256 \
+  -e TELNO_DB=/data/control-plane.db \
+  -e TELNO_ADMIN_USER=admin -e TELNO_ATA_USER=admin \
+  -e TELNO_CANTUS_DIR=/app/vendor/cantus \
+  -e TELNO_VOICE_PORT=7443 -e TELNO_PERL=perl \
+  -e TELNO_TRUSTED_NETWORKS=127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16 \
+  telno:latest
+
+# Or, if /opt/telno still holds the old compose file:
+#   cd /opt/telno && docker compose up -d
 ```
 
 Point the proxy back at the old app. **Never** `down -v` here: it deletes the
@@ -161,9 +218,10 @@ machine that is not .53.
 
 ## Known edges
 
-- **uid 999.** The image runs unprivileged. A volume written by an older,
-  root-running image needs one `chown`; the entrypoint prints the exact command
-  instead of failing obscurely.
+- **uid 999.** The image runs unprivileged, and the volume it reuses on .53 is
+  owned 1000:1000 by the control-plane build. The `chown` in §5 is not optional,
+  and rollback reverses it — the entrypoint names the command rather than failing
+  obscurely.
 - **TLS.** Session cookies are secure, so a production boot refuses an `http`
   public URL on a real hostname. Terminate TLS in the proxy; do not set
   `ALLOW_INSECURE_PUBLIC_URL`.

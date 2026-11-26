@@ -35,6 +35,8 @@ services:
     image: telno:${TELNO_TAG:-archive-2026-10-29}
     container_name: telno
     restart: unless-stopped
+    # Reap the short-lived children the node server spawns (probes, ssl clients).
+    init: true
 
     # A readable hostname on purpose: Docker's default is a hex container id,
     # and a SIP parser reads a digit-leading host as a broken IPv4 address.
@@ -78,6 +80,11 @@ services:
           memory: 128M
 
 volumes:
+  # Adopted, not created: the control-plane build already wrote this volume, and
+  # it holds the legacy database, faxes and recordings. Declaring it external
+  # keeps compose from refusing a volume whose labels it did not write.
   telno-data:
+    external: true
+    name: telno_telno-data
   telno-asterisk:
   telno-spool:
