@@ -109,6 +109,13 @@ cp <this repo>/deploy/telno/env.53 .env
 chmod 600 .env
 # The compose build context; /opt/telno is the old deployment and must stay put.
 echo 'TELNO_SRC=/opt/telno-src' >> .env
+
+# The two paths the compose file mounts over the image (see "Deploying without a
+# builder" below). They have to exist before `up -d` or Docker mounts an empty
+# directory over the console.
+mkdir -p overlay
+cp /opt/telno-src/src/routes/onboarding.js overlay/onboarding.js
+( cd /opt/telno-src && npm run build ) && cp -a /opt/telno-src/web/dist overlay/web-dist
 ```
 
 The compose files stay outside the checkout so a `git pull` never touches them.
@@ -120,6 +127,22 @@ and Cantus puts fax out of scope), and **T.38 off** (`FAX_T38=false`) because
 VoIP.ms answers a T.38 renegotiation with 488 and there is no mid-call fallback.
 No secret is in it: session/AMI keys generate on the volume, and VoIP.ms, Stripe
 and LLM keys belong in Settings → Vault.
+
+## 2a. Deploying without a builder
+
+On .53 the Docker builder stalls (base-image metadata for the full build, and a
+two-file layered build both hang), so `docker compose build` is not available
+there. The compose file mounts two host paths into the container instead:
+
+| Host path | Container path | What |
+| --- | --- | --- |
+| `overlay/onboarding.js` | `/app/src/routes/onboarding.js` | the onboarding email route |
+| `overlay/web-dist` | `/app/web/dist` | the built console |
+
+They are the deployed code, so a `compose up` recreate keeps them — the image
+tag is untouched. `/root/refresh-overlay.sh` on .53 rebuilds the SPA from
+`/opt/telno-src`, copies both into `overlay/`, and restarts the container. Delete
+the two mount lines once a build actually completes on that host.
 
 ## 3. Build (once, for both files)
 

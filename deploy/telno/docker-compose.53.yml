@@ -61,6 +61,11 @@ services:
       - telno-data:/data                 # database, secrets, recordings, backups
       - telno-asterisk:/etc/asterisk     # generated switch configuration
       - telno-spool:/var/spool/asterisk  # voicemail and fax spool
+      # The onboarding email step, mounted over the image. The builder cannot
+      # rebuild on this host, so these two paths are the deployed code: they
+      # survive a `compose up` recreate. Remove both once the image carries it.
+      - ./overlay/onboarding.js:/app/src/routes/onboarding.js:ro
+      - ./overlay/web-dist:/app/web/dist:ro
 
     # Asterisk gets time to hang up channels and flush its spool on a stop.
     stop_grace_period: 30s
