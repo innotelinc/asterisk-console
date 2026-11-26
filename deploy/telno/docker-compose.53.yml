@@ -32,7 +32,10 @@ services:
         # The branch defaults to 22-current; pin a release for a reproducible build.
         ASTERISK_VERSION: ${ASTERISK_VERSION:-22-current}
 
-    image: telno:${TELNO_TAG:-archive-2026-10-29}
+    # Built by .github/workflows/image.yml in the telno repo and pulled from GHCR:
+    # the builder on this host stalls and the Asterisk compile takes 30-60 min.
+    # Pin the sha-<short> tag instead of the branch tag for a reproducible deploy.
+    image: ${TELNO_IMAGE:-ghcr.io/innotelinc/telno:feature-onboarding-email-edit}
     container_name: telno
     restart: unless-stopped
     # Reap the short-lived children the node server spawns (probes, ssl clients).
@@ -61,11 +64,6 @@ services:
       - telno-data:/data                 # database, secrets, recordings, backups
       - telno-asterisk:/etc/asterisk     # generated switch configuration
       - telno-spool:/var/spool/asterisk  # voicemail and fax spool
-      # The onboarding email step, mounted over the image. The builder cannot
-      # rebuild on this host, so these two paths are the deployed code: they
-      # survive a `compose up` recreate. Remove both once the image carries it.
-      - ./overlay/onboarding.js:/app/src/routes/onboarding.js:ro
-      - ./overlay/web-dist:/app/web/dist:ro
 
     # Asterisk gets time to hang up channels and flush its spool on a stop.
     stop_grace_period: 30s

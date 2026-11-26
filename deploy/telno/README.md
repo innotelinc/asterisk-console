@@ -13,8 +13,9 @@ Three files, all in this directory:
 | `docker-compose.53.yml` | cutover: host networking, canonical ports |
 | `docker-compose.53-preview.yml` | optional dry run beside the old app, 8081 only |
 
-The image compiles Asterisk 22 from source with its own pjproject, so the first
-build is the slow part (30–60 minutes, needs ~5 GB of disk).
+The image compiles Asterisk 22 from source with its own pjproject, so a build is
+the slow part (30–60 minutes, needs ~5 GB of disk). It is therefore built in CI
+and pulled from GHCR — see §2a.
 
 ## 0. What is already on .53
 
@@ -109,13 +110,6 @@ cp <this repo>/deploy/telno/env.53 .env
 chmod 600 .env
 # The compose build context; /opt/telno is the old deployment and must stay put.
 echo 'TELNO_SRC=/opt/telno-src' >> .env
-
-# The two paths the compose file mounts over the image (see "Deploying without a
-# builder" below). They have to exist before `up -d` or Docker mounts an empty
-# directory over the console.
-mkdir -p overlay
-cp /opt/telno-src/src/routes/onboarding.js overlay/onboarding.js
-( cd /opt/telno-src && npm run build ) && cp -a /opt/telno-src/web/dist overlay/web-dist
 ```
 
 The compose files stay outside the checkout so a `git pull` never touches them.
@@ -128,21 +122,37 @@ VoIP.ms answers a T.38 renegotiation with 488 and there is no mid-call fallback.
 No secret is in it: session/AMI keys generate on the volume, and VoIP.ms, Stripe
 and LLM keys belong in Settings → Vault.
 
-## 2a. Deploying without a builder
+## 2a. Images come from CI, not from this host
 
-On .53 the Docker builder stalls (base-image metadata for the full build, and a
-two-file layered build both hang), so `docker compose build` is not available
-there. The compose file mounts two host paths into the container instead:
+`.github/workflows/image.yml` in the telno repo builds on a runner and pushes to
+GHCR; the host only pulls. The builder on .53 stalls (base-image metadata for the
+full build, a two-file layered build and `docker commit` all hang), and the
+Asterisk compile is 30–60 minutes even where it works, so nothing is built here.
 
-| Host path | Container path | What |
-| --- | --- | --- |
-| `overlay/onboarding.js` | `/app/src/routes/onboarding.js` | the onboarding email route |
-| `overlay/web-dist` | `/app/web/dist` | the built console |
+| Tag | Written by |
+| --- | --- |
+| `ghcr.io/innotelinc/telno:feature-onboarding-email-edit` | each push to that branch |
+| `ghcr.io/innotelinc/telno:sha-<short>` | that exact commit |
+| `ghcr.io/innotelinc/telno:latest` | `main` |
 
-They are the deployed code, so a `compose up` recreate keeps them — the image
-tag is untouched. `/root/refresh-overlay.sh` on .53 rebuilds the SPA from
-`/opt/telno-src`, copies both into `overlay/`, and restarts the container. Delete
-the two mount lines once a build actually completes on that host.
+The package is private, so the host logs in once with a token that can read
+packages (the host's `gh` login already has that scope):
+
+```sh
+gh auth token | docker login ghcr.io -u innotelinc --password-stdin
+```
+
+A deploy is then a pull and a recreate; `build:` in the compose file stays only
+as a fallback for a host with a working builder:
+
+```sh
+docker compose -f docker-compose.53.yml pull
+docker compose -f docker-compose.53.yml up -d
+```
+
+`/root/switch-to-ci-image.sh <image:tag>` does that with a health check and puts
+the previous image back if the platform does not come up. The branch tag moves on
+every push — set `TELNO_IMAGE` to a `sha-<short>` tag to pin one build.
 
 ## 3. Build (once, for both files)
 
